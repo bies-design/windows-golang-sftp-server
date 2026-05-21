@@ -47,8 +47,15 @@ func main() {
 	maxUploads := viper.GetInt("MAX_UPLOADS")
 	maxDownloads := viper.GetInt("MAX_DOWNLOADS")
 
+	// ✨ 新增調整：確保根目錄與業務專屬子目錄 toGlb, frag 存在
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("無法建立資料目錄: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "toGlb"), 0755); err != nil {
+		log.Fatalf("無法建立 toGlb 目錄: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "frag"), 0755); err != nil {
+		log.Fatalf("無法建立 frag 目錄: %v", err)
 	}
 
 	// ==================== 2. 實例初始化 (調用 models) ====================
@@ -71,7 +78,7 @@ func main() {
 			json.NewEncoder(w).Encode(tasks)
 		})
 
-		// 功能 1：顯示當前 working folder 內已經完成上傳的檔案列表
+		// 功能 1：顯示當前 working folder ，程序重啟時，網頁一呼叫此 API 就會自動從實體磁碟載入
 		http.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
 			files, err := os.ReadDir(dataDir)
 			if err != nil {
@@ -85,6 +92,7 @@ func main() {
 			}
 			var list []FileItem
 			for _, f := range files {
+				// ✨ 自動過濾：只加載根目錄檔案，自動排除子資料夾（toGlb與frag不會被錯當成普通檔案列出）
 				if !f.IsDir() {
 					info, err := f.Info()
 					if err == nil {

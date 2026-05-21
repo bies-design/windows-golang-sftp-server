@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 	"os"
+	"path/filepath"
 )
 
 // Task 記錄單一上傳或下載任務的狀態 (公開欄位以利 JSON 序列化)
@@ -18,6 +19,7 @@ type Task struct {
 	Percent    int       `json:"percent,omitempty"`
 	ErrorMsg   string    `json:"error_msg,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	ConvertedAt string    `json:"converted_at,omitempty"`
 }
 
 // Manager 負責管理所有運行中的任務 (支援併發安全)
@@ -140,8 +142,16 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// 關鍵 3：比對修改時間，相同就優雅跳過，不同才往下跑 Pipeline
 	if !tm.ShouldProcessFile(fullPath, currentMtime) {
-		// 先將狀態設為 processing，百分比給 100%，讓前端「即時看板」能留在畫面上
-		tm.UpdatePipeline(taskID, "已完成 (內容未變更，跳過轉換)", 100, "processing", "")
+		tm.mu.Lock()
+		if t, exists := tm.tasks[taskID]; exists {
+			t.Stage = "已完成 (內容未變更，跳過轉換)"
+			t.Percent = 100
+			t.Status = "processing"
+			// 如果跳過，轉換時間直接繼承當前，或是您可以保持空白
+			t.ConvertedAt = time.Now().Format("2006-01-02 15:04:05") 
+			t.UpdatedAt = time.Now()
+		}
+		tm.mu.Unlock()
 		
 		// 開啟一個輕量級協程 (Goroutine)，讓它在即時看板上停留 5 秒，再正式歸檔移出
 		go func() {
@@ -151,10 +161,19 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 		return
 	}
 
-	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
+	// 解析出純檔名（不含副檔名）以利路徑分流
+	baseDir := filepath.Dir(fullPath)
+	fileName := filepath.Base(fullPath)
+	ext := filepath.Ext(fileName)
+	pureName := fileName[:len(fileName)-len(ext)]
+
+	// ✨ 新增調整：將產出檔案引導至專屬子資料夾 toGlb 與 frag
+	glbPath := filepath.Join(baseDir, "toGlb", pureName+".glb")
+	zipPath := filepath.Join(baseDir, "frag", pureName+"_processed.zip")
 
 	// === 階段 1: 3dm to glb (rhino.compute) ===
-	if err := callRhinoCompute(fullPath); err != nil {
+	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
+	if err := callRhinoCompute(fullPath, glbPath); err != nil {
 		tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "failed", fmt.Sprintf("Rhino 轉換失敗: %v", err))
 		return
 	}
@@ -163,8 +182,7 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// === 階段 2: glb to fragment+材質包 (thatopen, nodejs project) ===
 	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "processing", "")
-	glbPath := fullPath[:len(fullPath)-4] + ".glb"
-	if err := callThatOpenConverter(glbPath); err != nil {
+	if err := callThatOpenConverter(glbPath, zipPath); err != nil {
 		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", err))
 		return
 	}
@@ -173,24 +191,36 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// === 階段 3: frag. + 材質包壓縮檔案 上傳到 seaweedfs ===
 	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "processing", "")
-	zipPath := fullPath[:len(fullPath)-4] + "_processed.zip"
 	if err := uploadToSeaweedFS(zipPath); err != nil {
 		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
 		return
 	}
 	
 	// 全部完成
-	tm.UpdatePipeline(taskID, "已完成", 100, "completed", "")
+	tm.mu.Lock()
+	if t, exists := tm.tasks[taskID]; exists {
+		t.Stage = "已完成"
+		t.Percent = 100
+		t.Status = "processing"
+		t.ConvertedAt = time.Now().Format("2006-01-02 15:04:05") // 寫入清晰的轉換成功時間
+		t.UpdatedAt = time.Now()
+	}
+	tm.mu.Unlock()
+
+	go func() {
+		time.Sleep(5 * time.Second)
+		tm.UpdateStatus(taskID, "completed")
+	}()
 }
 
 // --- 外部服務中介聯結介面 (預留實作骨架) ---
-func callRhinoCompute(inputPath string) error {
+func callRhinoCompute(inputPath, outputPath string) error {
 	// 實際操作：透過 http.Post 將檔案送至 rhino.compute 伺服器
 	time.Sleep(2 * time.Second) // 模擬權重代入
 	return nil
 }
 
-func callThatOpenConverter(glbPath string) error {
+func callThatOpenConverter(glbPath string, outputZipPath string) error {
 	// 實際操作：使用 exec.Command("node", "convert.js", glbPath) 調用 Node.js 服務
 	time.Sleep(2 * time.Second)
 	return nil
