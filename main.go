@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -80,13 +81,18 @@ func main() {
 			type FileItem struct {
 				Name string `json:"name"`
 				Size int64  `json:"size"`
+				ModTime time.Time `json:"mod_time"` // 修改時間欄位
 			}
 			var list []FileItem
 			for _, f := range files {
 				if !f.IsDir() {
 					info, err := f.Info()
 					if err == nil {
-						list = append(list, FileItem{Name: f.Name(), Size: info.Size()})
+						list = append(list, FileItem{
+							Name: f.Name(), 
+							Size: info.Size(), 
+							ModTime: info.ModTime(), // 修改時間
+						})
 					}
 				}
 			}
@@ -235,7 +241,7 @@ const htmlTemplate = `
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>BIM SFTP 雲端管控工作台</title>
+    <title>BIES Auto Converter SFTP 雲端管控工作台</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>body { padding: 30px; background-color: #f4f6f9; } .card { margin-bottom: 25px; }</style>
 </head>
@@ -331,10 +337,17 @@ const htmlTemplate = `
             return false;
         }
 
-        // 渲染歷史紀錄 UI
+        // 渲染歷史紀錄 UI, 加上防禦機制
         function renderHistoryUI() {
             const historyMap = getLocalHistory();
             const box = document.getElementById('historyListBox');
+
+			// 🔥 關鍵修正：如果找不到元素，優雅退出，不讓程式崩潰
+			if (!box) {
+				console.warn('找不到 id 为 historyListBox 的元素，請檢查 HTML 結構。');
+				return;
+			}
+
             const keys = Object.keys(historyMap);
 
             if (keys.length === 0) {
@@ -386,14 +399,41 @@ const htmlTemplate = `
             } catch(e) { report.className = "mt-2 small text-danger"; report.innerText = "網路連線異常"; }
         }
 
+		// 增強修正：依時間排序，最新一筆 10 分鐘內自動加上 ➕ 小圖示，提示使用者這是剛剛上傳的檔案
         async function refreshFiles() {
             try {
                 const res = await fetch('/api/files');
                 const list = await res.json();
                 const tbody = document.getElementById('fileTableBody');
                 if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted">目前工作資料夾無實體檔案</td></tr>'; return; }
-                tbody.innerHTML = list.map(function(f) {
-                    return '<tr><td><strong>' + f.name + '</strong></td><td>' + f.size.toLocaleString() + '</td></tr>';
+
+				// 🛠️ 修正：依據最後修改時間從新到舊排序 (Newest first)
+                list.sort(function(a, b) {
+                    return new Date(b.mod_time) - new Date(a.mod_time);
+                });
+
+                const now = new Date();
+                const tenMinutesInMs = 10 * 60 * 1000;
+
+                tbody.innerHTML = list.map(function(f, index) {
+                    let prefix = '';
+                    
+                    // 🛠️ index === 0 代表這是最新加入/更改的檔案紀錄
+                    if (index === 0) {
+                        const fileTime = new Date(f.mod_time);
+                        // 判定是否在 10 分鐘（600,000 毫秒）之內
+                        if (now - fileTime <= tenMinutesInMs) {
+                            prefix = '<span class="badge bg-success me-2">➕ 最新上傳</span> ';
+                        }
+                    }
+
+                    const displayTime = new Date(f.mod_time).toLocaleString();
+
+                    return '<tr>' +
+                        '<td>' + prefix + '<strong>' + f.name + '</strong></td>' +
+                        '<td>' + f.size.toLocaleString() + '</td>' +
+                        '<td><span class="text-secondary font-monospace small">' + displayTime + '</span></td>' +
+                    '</tr>';
                 }).join('');
             } catch(e) { console.error(e); }
         }
@@ -420,12 +460,21 @@ const htmlTemplate = `
 
                 box.innerHTML = activeTasks.map(function(t) {
                     let color = 'bg-primary';
+
+					// 🛠️ 優化：如果任務進度已經達到 100% (例如被跳過或在收尾階段)，進度條直接顯示綠色 (bg-success)
+					if (t.percent === 100) {
+						color = 'bg-success';
+					} else if (t.status === 'failed') {
+						color = 'bg-danger';
+					}
+
                     let stageInfo = ' <br><small class="text-secondary">當前步驟: <strong>' + (t.stage || '調度中') + '</strong></small>';
 
                     return '<div class="mb-3 border-bottom pb-2">' +
                         '<div class="d-flex justify-content-between font-weight-bold">' +
                             '<span>📁 ' + t.file_path + ' <span class="badge bg-light text-dark font-monospace">' + t.type.toUpperCase() + '</span></span>' +
-                            '<span class="badge bg-info">' + t.status.toUpperCase() + '</span>' +
+							// 如果百分比是 100, Badge 顯示 SUCCESS 會比 PROCESSING 更精準
+            				'<span class="badge ' + (t.percent === 100 ? 'bg-success' : 'bg-info') + '">' + (t.percent === 100 ? 'SUCCESS' : t.status.toUpperCase()) + '</span>' +
                         '</div>' +
                         stageInfo +
                         '<div class="progress mt-2" style="height: 18px;">' +
@@ -437,14 +486,16 @@ const htmlTemplate = `
                 }).join('');
             } catch(e) { console.error(e); }
         }
-
-        // 初始化定時更新與歷史紀錄載入
-        refreshFiles(); 
-        renderHistoryUI();
-        refreshPipelines();
-        
-        setInterval(refreshFiles, 4000);
-        setInterval(refreshPipelines, 1500);
+			
+		// 2. 🔥 關鍵修正：將定時器與初始化移入 DOMContentLoaded 中，確保 HTML 載入完畢才執行
+		document.addEventListener('DOMContentLoaded', function() {
+			refreshFiles(); 
+			renderHistoryUI();
+			refreshPipelines();
+			
+			setInterval(refreshFiles, 4000);
+			setInterval(refreshPipelines, 1500);
+		});
     </script>
 </body>
 </html>

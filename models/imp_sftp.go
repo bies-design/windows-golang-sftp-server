@@ -107,7 +107,13 @@ func (b *CustomSFTPBackend) Filecmd(req *sftp.Request) error {
 	switch req.Method {
 	case "Setstat":
 		// GUI 客戶端上傳檔案後，經常會發送 Setstat 來修改檔案時間或權限
-		// 直接回傳 nil 讓其順利通關
+		attrs := req.Attributes()
+		if attrs != nil && attrs.Mtime > 0 {
+			mtime := attrs.ModTime()
+			atime := attrs.AccessTime()
+			// 將客戶端本機檔案的真實修改時間（ModTime）同步寫入伺服器的檔案系統
+			_ = os.Chtimes(fullPath, atime, mtime)
+		}
 		return nil
 	case "Mkdir":
 		return os.MkdirAll(fullPath, 0755)

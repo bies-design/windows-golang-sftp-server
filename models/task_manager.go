@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	// "path/filepath"
+	"os"
 )
 
 // Task 記錄單一上傳或下載任務的狀態 (公開欄位以利 JSON 序列化)
@@ -13,7 +13,7 @@ type Task struct {
 	TaskType   string `json:"type"` // "upload", "download", "pipeline"
 	FilePath   string `json:"file_path"`
 	BytesTrans int64  `json:"bytes_transferred"`
-	Status     string `json:"status"` // "running", "completed", "error"
+	Status     string `json:"status"` // "running", "processing", "completed", "failed"
 	Stage      string    `json:"stage,omitempty"`
 	Percent    int       `json:"percent,omitempty"`
 	ErrorMsg   string    `json:"error_msg,omitempty"`
@@ -24,13 +24,32 @@ type Task struct {
 type Manager struct {
 	mu    sync.RWMutex
 	tasks map[string]*Task
+	lastMtimes map[string]time.Time // 記錄每個完整路徑檔案上一次執行的修改時間
 }
 
 // NewManager 初始化並回傳一個全新的 Manager 實例
 func NewManager() *Manager {
 	return &Manager{
 		tasks: make(map[string]*Task),
+		lastMtimes: make(map[string]time.Time), // 初始化修改時間記錄
 	}
+}
+
+// ShouldProcessFile 檢查檔案修改時間是否與上一次不同
+// 若相同回傳 false (跳過)；若不同或新檔案則更新時間並回傳 true (允許執行)
+func (tm *Manager) ShouldProcessFile(fullPath string, currentMtime time.Time) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	lastMtime, exists := tm.lastMtimes[fullPath]
+	// 如果紀錄存在，且時間完全相同，代表檔案沒變，拒絕重新進入 pipeline
+	if exists && lastMtime.Equal(currentMtime) {
+		return false
+	}
+
+	// 時間不同或者是全新上傳的檔案，更新紀錄並放行
+	tm.lastMtimes[fullPath] = currentMtime
+	return true
 }
 
 // AddTask 新增一個任務到管理器中
@@ -106,9 +125,32 @@ func GenerateTaskID(taskType string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// StartPipeline 核心功能 2：執行三階段 BIM 轉換與上傳流水線
+// StartPipeline 核心功能 ：執行三階段 BIM 轉換與上傳流水線
 func (tm *Manager) StartPipeline(taskID string, fullPath string) {
-	// fileName := filepath.Base(fullPath)
+    // 關鍵 1：稍微延遲 200 毫秒，給 SFTP 客戶端的 Setstat 指令完成寫入時間的空檔
+	time.Sleep(200 * time.Millisecond)
+
+	// 關鍵 2：讀取實體檔案在硬碟上的最新狀態
+	fi, err := os.Stat(fullPath)
+	if err != nil {
+		tm.UpdatePipeline(taskID, "讀取檔案狀態失敗", 0, "failed", fmt.Sprintf("無法獲取檔案資訊: %v", err))
+		return
+	}
+	currentMtime := fi.ModTime()
+
+	// 關鍵 3：比對修改時間，相同就優雅跳過，不同才往下跑 Pipeline
+	if !tm.ShouldProcessFile(fullPath, currentMtime) {
+		// 先將狀態設為 processing，百分比給 100%，讓前端「即時看板」能留在畫面上
+		tm.UpdatePipeline(taskID, "已完成 (內容未變更，跳過轉換)", 100, "processing", "")
+		
+		// 開啟一個輕量級協程 (Goroutine)，讓它在即時看板上停留 5 秒，再正式歸檔移出
+		go func() {
+			time.Sleep(5 * time.Second)
+			tm.UpdateStatus(taskID, "completed")
+		}()
+		return
+	}
+
 	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
 
 	// === 階段 1: 3dm to glb (rhino.compute) ===
