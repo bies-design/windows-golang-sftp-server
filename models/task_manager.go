@@ -4,15 +4,20 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	// "path/filepath"
 )
 
 // Task 記錄單一上傳或下載任務的狀態 (公開欄位以利 JSON 序列化)
 type Task struct {
 	ID         string `json:"id"`
-	TaskType   string `json:"type"` // "upload" 或 "download"
+	TaskType   string `json:"type"` // "upload", "download", "pipeline"
 	FilePath   string `json:"file_path"`
 	BytesTrans int64  `json:"bytes_transferred"`
 	Status     string `json:"status"` // "running", "completed", "error"
+	Stage      string    `json:"stage,omitempty"`
+	Percent    int       `json:"percent,omitempty"`
+	ErrorMsg   string    `json:"error_msg,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Manager 負責管理所有運行中的任務 (支援併發安全)
@@ -32,6 +37,7 @@ func NewManager() *Manager {
 func (tm *Manager) AddTask(t *Task) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	t.UpdatedAt = time.Now()
 	tm.tasks[t.ID] = t
 }
 
@@ -41,6 +47,7 @@ func (tm *Manager) UpdateProgress(id string, n int64) {
 	defer tm.mu.Unlock()
 	if t, exists := tm.tasks[id]; exists {
 		t.BytesTrans += n
+		t.UpdatedAt = time.Now()
 	}
 }
 
@@ -50,7 +57,28 @@ func (tm *Manager) UpdateStatus(id string, status string) {
 	defer tm.mu.Unlock()
 	if t, exists := tm.tasks[id]; exists {
 		t.Status = status
+		t.UpdatedAt = time.Now()
 	}
+}
+
+// UpdatePipeline 用於精準更新三階段流水線的進度
+func (tm *Manager) UpdatePipeline(id string, stage string, percent int, status string, errMsg string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if t, exists := tm.tasks[id]; exists {
+		t.Stage = stage
+		t.Percent = percent
+		t.Status = status
+		t.ErrorMsg = errMsg
+		t.UpdatedAt = time.Now()
+	}
+}
+
+func (tm *Manager) GetTask(id string) (*Task, bool) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	t, exists := tm.tasks[id]
+	return t, exists
 }
 
 // GetAllTasks 取得當前所有任務的快照列表 (供 API 統合回應使用)
@@ -67,10 +95,67 @@ func (tm *Manager) GetAllTasks() []Task {
 // GenerateTaskID 依據任務類型產生不重複的唯一識別碼
 func GenerateTaskID(taskType string) string {
 	prefix := "UNK"
-	if taskType == "upload" {
+	switch taskType {
+	case "upload":
 		prefix = "UP"
-	} else if taskType == "download" {
+	case "download":
 		prefix = "DL"
+	case "pipeline":
+		prefix = "PL"
 	}
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+}
+
+// StartPipeline 核心功能 2：執行三階段 BIM 轉換與上傳流水線
+func (tm *Manager) StartPipeline(taskID string, fullPath string) {
+	// fileName := filepath.Base(fullPath)
+	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
+
+	// === 階段 1: 3dm to glb (rhino.compute) ===
+	if err := callRhinoCompute(fullPath); err != nil {
+		tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "failed", fmt.Sprintf("Rhino 轉換失敗: %v", err))
+		return
+	}
+	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 100, "processing", "")
+	time.Sleep(800 * time.Millisecond) // 轉場平滑感
+
+	// === 階段 2: glb to fragment+材質包 (thatopen, nodejs project) ===
+	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "processing", "")
+	glbPath := fullPath[:len(fullPath)-4] + ".glb"
+	if err := callThatOpenConverter(glbPath); err != nil {
+		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", err))
+		return
+	}
+	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 100, "processing", "")
+	time.Sleep(800 * time.Millisecond)
+
+	// === 階段 3: frag. + 材質包壓縮檔案 上傳到 seaweedfs ===
+	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "processing", "")
+	zipPath := fullPath[:len(fullPath)-4] + "_processed.zip"
+	if err := uploadToSeaweedFS(zipPath); err != nil {
+		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
+		return
+	}
+	
+	// 全部完成
+	tm.UpdatePipeline(taskID, "已完成", 100, "completed", "")
+}
+
+// --- 外部服務中介聯結介面 (預留實作骨架) ---
+func callRhinoCompute(inputPath string) error {
+	// 實際操作：透過 http.Post 將檔案送至 rhino.compute 伺服器
+	time.Sleep(2 * time.Second) // 模擬權重代入
+	return nil
+}
+
+func callThatOpenConverter(glbPath string) error {
+	// 實際操作：使用 exec.Command("node", "convert.js", glbPath) 調用 Node.js 服務
+	time.Sleep(2 * time.Second)
+	return nil
+}
+
+func uploadToSeaweedFS(zipPath string) error {
+	// 實際操作：將產出的壓縮材質包上傳到 SeaweedFS 分散式儲存
+	time.Sleep(1 * time.Second)
+	return nil
 }

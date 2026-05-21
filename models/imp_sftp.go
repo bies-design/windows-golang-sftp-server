@@ -59,6 +59,7 @@ func (b *CustomSFTPBackend) Filewrite(req *sftp.Request) (io.WriterAt, error) {
 
 	return &trackingWriter{
 		file:    file,
+		fullPath: fullPath, // 傳入完整路徑供後續流水線使用
 		taskID:  taskID,
 		taskMgr: b.TaskMgr,
 		sem:     b.UploadSem,
@@ -167,6 +168,7 @@ func (b *CustomSFTPBackend) Filelist(req *sftp.Request) (sftp.ListerAt, error) {
 // trackingWriter 包裝 os.File 以追蹤寫入進度
 type trackingWriter struct {
 	file    *os.File
+	fullPath string
 	taskID  string
 	taskMgr *Manager
 	sem     chan struct{}
@@ -180,12 +182,22 @@ func (t *trackingWriter) WriteAt(p []byte, off int64) (int, error) {
 }
 
 func (t *trackingWriter) Close() error {
-	if !t.closed {
-		t.taskMgr.UpdateStatus(t.taskID, "completed")
-		<-t.sem
-		t.closed = true
+	if t.closed {
+		return nil
 	}
-	return t.file.Close()
+	t.closed = true
+	<-t.sem
+	
+	err := t.file.Close() // 先行關閉檔案句柄釋放系統鎖定
+
+	// SFTP 上傳完成後，判定是否為 3dm 檔案並啟動 Pipeline
+	if filepath.Ext(t.fullPath) == ".3dm" {
+		t.taskMgr.UpdateStatus(t.taskID, "processing")
+		go t.taskMgr.StartPipeline(t.taskID, t.fullPath)
+	} else {
+		t.taskMgr.UpdateStatus(t.taskID, "completed")
+	}
+	return err
 }
 
 // trackingReader 包裝 os.File 以追蹤讀取進度
