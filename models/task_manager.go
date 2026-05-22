@@ -197,6 +197,9 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
 		return
 	}
+
+	// === 階段 4✨ S3 上傳成功紀錄
+	tm.LogS3Upload(baseDir, pureName+"_processed.zip", true, "")
 	
 	// 全部完成
 	tm.mu.Lock()

@@ -88,6 +88,42 @@
                 </table>
             </div>
         </div>
+
+        <div class="card shadow-sm border-warning">
+            <div class="card-header bg-warning text-dark font-weight-bold">📐 Working Folder 已完成 GLB 檔案清單 (toGlb 子目錄同步)</div>
+            <div class="card-body p-0 custom-scrollbar" style="max-height: 460px; overflow-y: auto;">
+                <table class="table table-striped table-hover align-middle m-0">
+                    <thead class="table-light text-nowrap" style="position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1);">
+                        <tr><th>檔案名稱</th><th>檔案大小 (Bytes)</th><th>實體檔案產出時間</th></tr>
+                    </thead>
+                    <tbody id="glbTableBody"><tr><td colspan="3" class="text-center text-muted p-3">讀取中...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-primary">
+            <div class="card-header bg-primary text-white font-weight-bold">🧩 Working Folder 已完成 Frag. 檔案清單 (frag 子目錄材質包同步)</div>
+            <div class="card-body p-0 custom-scrollbar" style="max-height: 460px; overflow-y: auto;">
+                <table class="table table-striped table-hover align-middle m-0">
+                    <thead class="table-light text-nowrap" style="position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1);">
+                        <tr><th>檔案名稱</th><th>檔案大小 (Bytes)</th><th>實體檔案產出時間</th></tr>
+                    </thead>
+                    <tbody id="fragTableBody"><tr><td colspan="3" class="text-center text-muted p-3">讀取中...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-danger">
+			<div class="card-header bg-danger text-white font-weight-bold">☁️ Upload 到 S3 設備記錄清單 (SeaweedFS 審計稽核日誌)</div>
+			<div class="card-body p-0 custom-scrollbar" style="max-height: 360px; overflow-y: auto;">
+				<table class="table table-striped table-hover align-middle m-0">
+					<thead class="table-light text-nowrap" style="position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1);">
+						<tr><th>上傳物件名稱</th><th>發送傳輸時間戳</th><th>雲端同步狀態結果</th></tr>
+					</thead>
+					<tbody id="s3TableBody"><tr><td colspan="3" class="text-center text-muted p-3">讀取中...</td></tr></tbody>
+				</table>
+			</div>
+		</div>
     </div>
 
     <script>
@@ -224,6 +260,40 @@
             } catch(e) { console.error(e); }
         }
 
+        // ✨：非同步輪詢刷新 GLB 檔案清單
+        async function refreshGlbFiles() {
+            try {
+                const res = await fetch('/api/files/glb'); const list = await res.json(); const tbody = document.getElementById('glbTableBody');
+                if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted p-3">目前 toGlb 目錄下無生成檔案</td></tr>'; return; }
+                list.sort((a, b) => new Date(b.mod_time) - new Date(a.mod_time));
+                tbody.innerHTML = list.map(f => '<tr><td class="ps-3">📐 <strong>' + f.name + '</strong></td><td>' + f.size.toLocaleString() + '</td><td><span class="text-secondary font-monospace small">' + new Date(f.mod_time).toLocaleString() + '</span></td></tr>').join('');
+            } catch(e) { console.error(e); }
+        }
+
+        // ✨：非同步輪詢刷新 Frag 檔案清單
+        async function refreshFragFiles() {
+            try {
+                const res = await fetch('/api/files/frag'); const list = await res.json(); const tbody = document.getElementById('fragTableBody');
+                if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted p-3">目前 frag 目錄下無生成材質包</td></tr>'; return; }
+                list.sort((a, b) => new Date(b.mod_time) - new Date(a.mod_time));
+                tbody.innerHTML = list.map(f => '<tr><td class="ps-3">🧩 <strong>' + f.name + '</strong></td><td>' + f.size.toLocaleString() + '</td><td><span class="text-secondary font-monospace small">' + new Date(f.mod_time).toLocaleString() + '</span></td></tr>').join('');
+            } catch(e) { console.error(e); }
+        }
+
+        // ✨：非同步輪詢刷新 S3 傳輸稽核日誌
+        async function refreshS3Logs() {
+            try {
+                const res = await fetch('/api/s3-logs'); const list = await res.json(); const tbody = document.getElementById('s3TableBody');
+                if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted p-3">暫無 S3 雲端儲存同步紀錄</td></tr>'; return; }
+                list.reverse(); // 最新紀錄在最上方
+                tbody.innerHTML = list.map(l => {
+                    let isSuccess = l.status === '成功';
+                    let badgeColor = isSuccess ? 'bg-success' : 'bg-danger';
+                    return '<tr><td class="ps-3">☁️ <code>' + l.file_name + '</code></td><td><span class="text-secondary font-monospace small">' + l.timestamp + '</span></td><td><span class="badge ' + badgeColor + '">' + l.status + '</span></td></tr>';
+                }).join('');
+            } catch(e) { console.error(e); }
+        }
+        
         async function refreshPipelines() {
             try {
                 const res = await fetch('/api/tasks');

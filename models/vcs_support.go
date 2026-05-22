@@ -18,7 +18,14 @@ type VersionRecord struct {
 	ArchivedAt string    `json:"archived_at"` // 被封存存檔的系統時間
 }
 
-// BackupExistingFile 在檔案被覆蓋前，自動建立快照並更新該檔案的版本日誌
+// ✨ S3 設備上傳審計紀錄結構體
+type S3Record struct {
+	FileName  string `json:"file_name"`
+	Timestamp string `json:"timestamp"`
+	Status    string `json:"status"` // "成功" 或 "失敗: 原因"
+}
+
+// BackupExistingFile 在檔案被覆蓋前，自動建立快照並更新該檔案的版本日誌，限制最多三個歷史版本
 func (tm *Manager) BackupExistingFile(baseDir, relPath string) {
 	cleanPath := filepath.Clean(relPath)
 	fullPath := filepath.Join(baseDir, cleanPath)
@@ -97,5 +104,40 @@ func (tm *Manager) BackupExistingFile(baseDir, relPath string) {
 	updatedData, err := json.MarshalIndent(records, "", "  ")
 	if err == nil {
 		_ = os.WriteFile(vcsLogPath, updatedData, 0644)
+	}
+}
+
+// ✨ 將 S3 上傳稽核紀錄安全地以先進先出（FIFO）滾動寫入實體 JSON 檔案
+// 外部網路 I/O 操作，極易因網路波動、憑證過期或儲存空間不足而失敗，因此不應該讓任何錯誤影響到核心轉換流程
+func (tm *Manager) LogS3Upload(baseDir string, fileName string, success bool, errMsg string) {
+	vcsDir := filepath.Join(baseDir, ".versions")
+	_ = os.MkdirAll(vcsDir, 0755)
+	logPath := filepath.Join(vcsDir, "s3_upload_log.json")
+
+	var records []S3Record
+	if logData, err := os.ReadFile(logPath); err == nil {
+		_ = json.Unmarshal(logData, &records)
+	}
+
+	statusStr := "成功"
+	if !success {
+		statusStr = fmt.Sprintf("失敗: %s", errMsg)
+	}
+
+	newLog := S3Record{
+		FileName:  fileName,
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+		Status:    statusStr,
+	}
+	records = append(records, newLog)
+
+	// 確保 S3 傳輸稽核日誌最大保留 100 筆，避免撐爆磁碟
+	if len(records) > 100 {
+		records = records[len(records)-100:]
+	}
+
+	updatedData, err := json.MarshalIndent(records, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(logPath, updatedData, 0644)
 	}
 }

@@ -153,6 +153,47 @@ func main() {
 			json.NewEncoder(w).Encode(list)
 		})
 
+		// ✨ API：動態掃描並獲取已產出的 GLB 檔案清單
+		http.HandleFunc("/api/files/glb", func(w http.ResponseWriter, r *http.Request) {
+			files, err := os.ReadDir(filepath.Join(dataDir, "toGlb"))
+			if err != nil { http.Error(w, "無法讀取 GLB 目錄", http.StatusInternalServerError); return }
+			type FileItem struct { Name string `json:"name"`; Size int64 `json:"size"`; ModTime time.Time `json:"mod_time"` }
+			var list []FileItem
+			for _, f := range files {
+				if !f.IsDir() && f.Name()[0] != '.' {
+					info, err := f.Info()
+					if err == nil { list = append(list, FileItem{Name: f.Name(), Size: info.Size(), ModTime: info.ModTime()}) }
+				}
+			}
+			w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(list)
+		})
+
+		// ✨ API：動態掃描並獲取已產出的 Frag 檔案清單
+		http.HandleFunc("/api/files/frag", func(w http.ResponseWriter, r *http.Request) {
+			files, err := os.ReadDir(filepath.Join(dataDir, "frag"))
+			if err != nil { http.Error(w, "無法讀取 Frag 目錄", http.StatusInternalServerError); return }
+			type FileItem struct { Name string `json:"name"`; Size int64 `json:"size"`; ModTime time.Time `json:"mod_time"` }
+			var list []FileItem
+			for _, f := range files {
+				if !f.IsDir() && f.Name()[0] != '.' {
+					info, err := f.Info()
+					if err == nil { list = append(list, FileItem{Name: f.Name(), Size: info.Size(), ModTime: info.ModTime()}) }
+				}
+			}
+			w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(list)
+		})
+
+		// ✨ API：讀取 S3 持久化審計日誌
+		http.HandleFunc("/api/s3-logs", func(w http.ResponseWriter, r *http.Request) {
+			vcsLogPath := filepath.Join(dataDir, ".versions", "s3_upload_log.json")
+			w.Header().Set("Content-Type", "application/json")
+			if data, err := os.ReadFile(vcsLogPath); err == nil {
+				w.Write(data)
+			} else {
+				w.Write([]byte("[]"))
+			}
+		})
+
 		// 功能 3：基礎網頁端檔案上傳
 		http.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
