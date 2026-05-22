@@ -43,6 +43,9 @@ func (b *CustomSFTPBackend) Filewrite(req *sftp.Request) (io.WriterAt, error) {
 		return nil, err
 	}
 
+	// ✨ 核心 VCS 插入點：在 os.OpenFile 覆蓋清空檔案之前，先呼叫備份快照
+	b.TaskMgr.BackupExistingFile(b.BaseDir, cleanPath)  // 同 package，直接調用 vcs_support.go 中的備份函式
+
 	file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		<-b.UploadSem

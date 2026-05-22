@@ -66,3 +66,46 @@ $ go run main.go --sftp-port=3022 --data-dir=/d/readyToConvert
 2026/05/20 18:00:26 [API] 伺服器已啟動，監聽 Port: 8088
 2026/05/20 18:00:26 [SFTP] 伺服器已啟動，監聽 Port: 3022, 儲存目錄: D:/readyToConvert
 ```
+
+### build
+
+## P.S.
+
+> 補充說明 <br/>
+
+本系統旨在不依賴任何外部資料庫（如 MySQL, PostgreSQL）的前提下，於本地檔案系統中為重型 3D 建築模型資產（如 `.3dm`）建立 100% 持久化、重啟免維護的多版本控制體系。
+
+### ⚙️ 設計理念 (Design Philosophy)
+
+1. **零外部依賴 (Zero-Database Dependency)**
+   BIM 模型檔案巨大，用資料庫儲存二進位或僅記錄狀態會使架構變得沉重。本系統將「版本元數據(JSON)」與「備份工件(Artifacts)」直接沉澱在硬碟。即便服務器重啟千百次，隨時掃描磁碟即可完成全量歷史重建。
+2. **事前快照攔截 (Pre-truncation Snapshot)**
+   不論是 Web 快速上傳還是標準的 SFTP 終端上傳，在底層呼叫 `os.O_TRUNC`（清空並覆蓋檔案）的前一刻，VCS 會強制插隊對舊檔案進行複製封存，確保歷史設計鏈條絕對不中斷。
+3. **隔離性防禦目錄學 (Defensive Architecture)**
+   所有歷史版本檔案和日誌全部收納在工作資料夾底下的隱藏目錄 `.versions/` 中。這對普通 SFTP 目錄瀏覽完全隱形，大幅降低設計師誤刪歷史版本的風險。
+
+### 📖 使用與交互指南 (Usage Guide)
+
+#### 後端觸發點 (Hooks)
+* **網頁端上傳** (`main.go` -> `/api/upload`)：
+  在 `os.Create(fullPath)` 前自動執行 `taskMgr.BackupExistingFile(dataDir, safeName)`。
+* **SFTP 客戶端上傳** (`models/imp_sftp.go` -> `Filewrite`)：
+  在 `os.OpenFile(..., os.O_TRUNC, ...)` 前自動執行 `b.TaskMgr.BackupExistingFile(b.BaseDir, cleanPath)`。
+
+#### 前端 UI 渲染流程
+1. **工作目錄渲染**：網頁每 4 秒呼叫一次 `/api/files`，動態列出實體工作資料夾的當前活躍檔案，並過濾掉隱藏檔與 `.versions`。
+2. **獲取版本歷史**：當用戶點擊某一檔案旁的 `📜 歷史版本` 按鈕時，前端發送請求至 `/api/versions?file=檔案名稱`。
+3. **數據時間線對齊**：後端即時讀取對應的 `{純檔名}_vcs.json` 回傳。前端收到後進行**時間降序排列**，將最新被覆蓋的版本置頂，完美展示模型的進化歷程。
+
+### 額外紀錄
+```bash
+main.go
+
+//go:embed index.html
+var htmlTemplate string
+// ✨ 核心重構：利用編譯期內嵌指令，將同目錄下的 index.html 內容自動綁定到 htmlTemplate 變數
+// 內嵌前端 UI 模板 
+// (整合 Bootstrap 5 進行資料輪詢更新)
+// (整合 localStorage 轉換歷史持久化紀錄，絕無反引號衝突)
+// ⚠️ 注意：//go:embed 與底下的變數宣告之間「不能有空行」
+```
