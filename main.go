@@ -26,6 +26,43 @@ import (
 //go:embed index.html
 var webAssets embed.FS
 
+// ✨ 新增防護函式：具備超時機制的目錄初始化守衛
+// 能有效防止網路磁碟機斷線時，程序永久卡死在 os.MkdirAll 的窘境
+func initDirectoriesWithTimeout(dataDir string, timeout time.Duration) error {
+	// 使用大小為 1 的緩衝通道，確保即使主執行緒因超時離開，背景 Goroutine 寫入時也不會阻塞卡死
+	ch := make(chan error, 1)
+
+	go func() {
+		// 在背景協程中安全地執行磁碟 I/O 操作
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			ch <- fmt.Errorf("無法建立根目錄: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dataDir, "toGlb"), 0755); err != nil {
+			ch <- fmt.Errorf("無法建立 toGlb 目錄: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dataDir, "frag"), 0755); err != nil {
+			ch <- fmt.Errorf("無法建立 frag 目錄: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dataDir, ".versions"), 0755); err != nil {
+			ch <- fmt.Errorf("無法建立 .versions 歷史庫: %v", err)
+			return
+		}
+		ch <- nil // 全部成功建立
+	}()
+
+	// 進行時序調度監控
+	select {
+	case err := <-ch:
+		return err // 在限時內完成，回傳實際結果 (成功或失敗)
+	case <-time.After(timeout):
+		// 超過指定時間背景仍無回應，判定為遠端磁碟連線異常
+		return fmt.Errorf("存取網路磁碟超時 (%v)！遠端儲存伺服器可能處於離線、睡眠或尚未掛載準備就緒的狀態", timeout)
+	}
+}
+
 func main() {
 	// ==================== 1. 初始化設定 ====================
 	viper.SetDefault("SFTP_PORT", "2022")
@@ -50,15 +87,10 @@ func main() {
 	maxUploads := viper.GetInt("MAX_UPLOADS")
 	maxDownloads := viper.GetInt("MAX_DOWNLOADS")
 
-	// ✨ 新增調整：確保根目錄與業務專屬子目錄 toGlb, frag 存在
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		log.Fatalf("無法建立資料目錄: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "toGlb"), 0755); err != nil {
-		log.Fatalf("無法建立 toGlb 目錄: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "frag"), 0755); err != nil {
-		log.Fatalf("無法建立 frag 目錄: %v", err)
+    // ✨ 核心修正：引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
+	log.Printf("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
+	if err := initDirectoriesWithTimeout(dataDir, 5*time.Second); err != nil {
+		log.Fatalf("❌ 啟動失敗 ── %v", err)
 	}
 
 	// ==================== 2. 實例初始化 (調用 models) ====================
@@ -195,7 +227,7 @@ func main() {
 			if data, err := os.ReadFile("index.html"); err == nil {
 				w.Write(data)
 			} else {
-				// 🟢 生產期安全降級：改由 webAssets 虛擬檔案系統中讀取 index.html 的 Byte 陣列
+				// 生產期安全降級：改由 webAssets 虛擬檔案系統中讀取 index.html 的 Byte 陣列
 				if embedData, err := webAssets.ReadFile("index.html"); err == nil {
 					w.Write(embedData)
 				} else {
@@ -204,7 +236,8 @@ func main() {
 			}
 		})
 
-		log.Printf("[API] 伺服器已啟動，監聽 Port: %s", apiPort)
+		log.Printf("🟢 [API] 伺服器已啟動，監聽 Port: %s", apiPort)
+		log.Fatal(http.ListenAndServe(":"+apiPort, nil)) // 🔥 API 核心, 此行有加入才會真正運行 http 服務，也才有網頁
 
 	}()
 
@@ -223,11 +256,11 @@ func main() {
 	config.AddHostKey(signer)
 
 	// ==================== 5. 啟動 SFTP 服務 ====================
-	listener, err := net.Listen("tcp", ":"+sftpPort)
+	listener, err := net.Listen("tcp", ":"+sftpPort) // 🔥 SFTP 核心
 	if err != nil {
 		log.Fatalf("無法監聽 SFTP Port: %v", err)
 	}
-	log.Printf("[SFTP] 伺服器已啟動，監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
+	log.Printf("🟢 [SFTP] 伺服器已啟動, 監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
 
 	for {
 		nConn, err := listener.Accept()
