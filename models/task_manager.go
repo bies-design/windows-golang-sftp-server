@@ -6,6 +6,8 @@ import (
 	"time"
 	"os"
 	"path/filepath"
+
+	"sftp-server/methods"
 )
 
 // Task 記錄單一上傳或下載任務的狀態 (公開欄位以利 JSON 序列化)
@@ -173,7 +175,7 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// === 階段 1: 3dm to glb (rhino.compute) ===
 	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
-	if err := callRhinoCompute(fullPath, glbPath); err != nil {
+	if err := callRhinoCompute("file", fullPath, glbPath); err != nil {
 		tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "failed", fmt.Sprintf("Rhino 轉換失敗: %v", err))
 		return
 	}
@@ -214,10 +216,15 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 }
 
 // --- 外部服務中介聯結介面 (預留實作骨架) ---
-func callRhinoCompute(inputPath, outputPath string) error {
-	// 實際操作：透過 http.Post 將檔案送至 rhino.compute 伺服器
-	time.Sleep(2 * time.Second) // 模擬權重代入
-	return nil
+func callRhinoCompute(pathType string, inputPath string, outputPath string) error {
+	// ✨ 核心調整：直接呼叫獨立封裝的解算方法，未來更換成其他解算器只需在 methods 修改
+	/**
+	* parameters:
+	* - pathType: "file" (本地檔案相對路徑)，"path" (本地檔案絕對路徑) 或 "url" (遠端檔案 URL)
+	* - inputPath: 3dm 檔案的檔名、完整路徑 (本地) 或 URL (遠端)，例如 "C:/data/model.3dm" 或 "https://example.com/model.3dm"
+	* - outputPath: 轉換後 glb 檔案的檔名、完整路徑 (本地) 或 URL (遠端)，例如 "C:/data/toGlb/model.glb" 或 "https://example.com/model.glb"
+	*/
+	return methods.CallRhinoCompute(pathType, inputPath, outputPath)
 }
 
 func callThatOpenConverter(glbPath string, outputZipPath string) error {

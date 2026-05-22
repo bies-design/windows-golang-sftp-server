@@ -1,5 +1,6 @@
-# windows-golang-sftp-server
+# windows-golang-Intelligent-BIM-Data-Conversion-Hub
 邊緣運行Rhino Compute服務的組件之一
+管理核心：智慧型 BIM 數據轉換樞紐
 
 ## ENV
 windows 11 Home, 64 位元 <br/>
