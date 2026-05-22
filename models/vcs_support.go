@@ -79,7 +79,21 @@ func (tm *Manager) BackupExistingFile(baseDir, relPath string) {
 	}
 	records = append(records, newRecord)
 
-	// 7. 重新寫回磁碟，保證重啟不丟失
+	// ✨ 7. 核心容量守衛：強制限額 3 次。若超過則執行先進先出 (FIFO) 刪除
+	// 使用 for 循環具備高度防禦性，能防止人工手動修改 JSON 導致多餘檔案殘留
+	for len(records) > 3 {
+		// 陣列最前端 [0] 即是最早的版本
+		oldestRecord := records[0]
+		oldestFullPath := filepath.Join(vcsDir, oldestRecord.BackupName)
+
+		// 強制刪除實體舊 3dm 檔案，放任錯誤處理 (避免因檔案被手動砍掉時導致程式中斷)
+		_ = os.Remove(oldestFullPath)
+
+		// 核心切片移位：將最早的紀錄從 Go 陣列中剝離 (Pop)
+		records = records[1:]
+	}
+
+	// 8. 重新寫回磁碟，保證重啟不丟失
 	updatedData, err := json.MarshalIndent(records, "", "  ")
 	if err == nil {
 		_ = os.WriteFile(vcsLogPath, updatedData, 0644)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 	"strings"
+	"log"
 
 	"github.com/spf13/viper"
 )
@@ -62,7 +63,7 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 
 		// 3. 抓出不含副檔名的純主檔名 (用於修復或校正)
 		inputPureName := inputBase[:len(inputBase)-len(inputExt)]
-		outputPureName := outputBase[:len(outputBase)-len(outputExt)]
+		outputPureName := strings.TrimSpace(outputBase[:len(outputBase)-len(outputExt)])
 
 		// 4. 【輸入防呆】檢查副檔名是否為 .3dm (不分大小寫)
 		if strings.ToLower(inputExt) != ".3dm" {

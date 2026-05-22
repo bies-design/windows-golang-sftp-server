@@ -2,9 +2,30 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>Intelligent BIM Data Conversion Hub</title>
+    <title>智慧型 BIM 數據轉換樞紐管控工作台</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>body { padding: 30px; background-color: #f4f6f9; } .card { margin-bottom: 25px; }</style>
+    <style>
+        body { padding: 30px; background-color: #f4f6f9; } 
+        .card { margin-bottom: 25px; }
+        .history-time { font-size: 0.75rem; color: #6c757d; }
+        .vcs-badge { font-size: 0.75rem; }
+
+        /* ✨ 新增：自訂美化滾動條樣式，讓介面更精緻 */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -23,17 +44,15 @@
 
         <div class="card shadow-sm">
             <div class="card-header bg-dark text-white font-weight-bold">⚡ 即時轉換與上傳流水線進度 (Rhino / ThatOpen / SeaweedFS)</div>
-            <div class="card-body" id="pipelineBox">
-                <span class="text-muted">目前系統無活躍中轉換任務...</span>
-            </div>
+            <div class="card-body" id="pipelineBox"><span class="text-muted">目前系統無活躍中轉換任務...</span></div>
         </div>
 
-		<div class="card shadow-sm border-secondary">
+        <div class="card shadow-sm border-secondary">
             <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
                 <span class="font-weight-bold">📜 歷史轉換存檔紀錄 (已儲存於瀏覽器本地)</span>
                 <button class="btn btn-danger btn-sm" onclick="clearLocalHistory()">清除歷史紀錄</button>
             </div>
-            <div class="card-body">
+            <div class="card-body custom-scrollbar" style="max-height: 360px; overflow-y: auto;">
                 <div id="historyListBox"><span class="text-muted">暫無歷史存檔紀錄</span></div>
             </div>
         </div>
@@ -54,52 +73,36 @@
         </div>
 
         <div class="card shadow-sm">
-            <div class="card-header bg-success text-white font-weight-bold">📦 Working Folder 已完成上傳檔案清單</div>
-            <div class="card-body">
-                <table class="table table-striped table-hover align-middle">
-                    <thead class="table-light"><tr><th>檔案名稱</th><th>檔案大小 (Bytes)</th></tr></thead>
-                    <tbody id="fileTableBody"><tr><td colspan="2" class="text-center text-muted">讀取中...</td></tr></tbody>
+            <div class="card-header bg-success text-white font-weight-bold">📦 Working Folder 已完成上傳檔案清單 (磁碟實體同步)</div>
+            <div class="card-body p-0 custom-scrollbar" style="max-height: 460px; overflow-y: auto;">
+                <table class="table table-striped table-hover align-middle m-0">
+                    <thead class="table-light text-nowrap" style="position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1);">
+                        <tr>
+                            <th>檔案名稱</th>
+                            <th>檔案大小 (Bytes)</th>
+                            <th>實體檔案最後更改時間 (覆蓋辨識用)</th>
+                            <th class="text-center">版本控制</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fileTableBody"><tr><td colspan="4" class="text-center text-muted">讀取中...</td></tr></tbody>
                 </table>
             </div>
         </div>
     </div>
 
-    <script>// 初始化本地儲存空間鍵值
+    <script>
         const STORAGE_KEY = 'bim_sftp_history_logs';
 
-        // 從 localStorage 讀取紀錄
-        function getLocalHistory() {
-            try {
-                const data = localStorage.getItem(STORAGE_KEY);
-                return data ? JSON.parse(data) : {};
-            } catch (e) {
-                return {};
-            }
-        }
+        function getLocalHistory() { try { const data = localStorage.getItem(STORAGE_KEY); return data ? JSON.parse(data) : {}; } catch (e) { return {}; } }
+        function saveLocalHistory(historyMap) { localStorage.setItem(STORAGE_KEY, JSON.stringify(historyMap)); }
+        function clearLocalHistory() { if (confirm('確定要清空瀏覽器本地的所有轉換歷史紀錄嗎？')) { localStorage.removeItem(STORAGE_KEY); renderHistoryUI(); } }
 
-        // 儲存紀錄至 localStorage
-        function saveLocalHistory(historyMap) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(historyMap));
-        }
-
-        // 清除歷史紀錄
-        function clearLocalHistory() {
-            if (confirm('確定要清空瀏覽器本地的所有轉換歷史紀錄嗎？')) {
-                localStorage.removeItem(STORAGE_KEY);
-                renderHistoryUI();
-            }
-        }
-
-        // 將當前的任務快照同步至歷史紀錄中
         function syncTasksToHistory(tasks) {
             if (!tasks || tasks.length === 0) return false;
             let historyMap = getLocalHistory();
             let hasChanged = false;
-
             tasks.forEach(function(t) {
-                // 當任務狀態為已完成(completed)或失敗(failed)時，寫入/更新至歷史存檔
                 if (t.status === 'completed' || t.status === 'failed') {
-                    // 若此任務尚未被存檔，或者狀態有更新，則寫入
                     if (!historyMap[t.id] || historyMap[t.id].status !== t.status || historyMap[t.id].stage !== t.stage) {
                         historyMap[t.id] = {
                             id: t.id,
@@ -109,61 +112,41 @@
                             stage: t.stage,
                             percent: t.percent,
                             error_msg: t.error_msg,
-                            saved_at: new Date().toLocaleString()
+                            converted_at: t.converted_at || new Date().toLocaleString()
                         };
                         hasChanged = true;
                     }
                 }
             });
-
-            if (hasChanged) {
-                saveLocalHistory(historyMap);
-                return true;
-            }
+            if (hasChanged) { saveLocalHistory(historyMap); return true; }
             return false;
         }
 
-        // 渲染歷史紀錄 UI, 加上防禦機制
         function renderHistoryUI() {
             const historyMap = getLocalHistory();
             const box = document.getElementById('historyListBox');
-
-			// 🔥 關鍵修正：如果找不到元素，優雅退出，不讓程式崩潰
-			if (!box) {
-				console.warn('找不到 id 为 historyListBox 的元素，請檢查 HTML 結構。');
-				return;
-			}
-
+            if (!box) return;
             const keys = Object.keys(historyMap);
-
-            if (keys.length === 0) {
-                box.innerHTML = '<span class="text-muted">暫無歷史存檔紀錄</span>';
-                return;
-            }
-
-            // 依時間降序排列 (新任務在前)
+            if (keys.length === 0) { box.innerHTML = '<span class="text-muted">暫無歷史存檔紀錄</span>'; return; }
             keys.sort((a, b) => b.localeCompare(a));
-
             box.innerHTML = keys.map(function(key) {
                 const t = historyMap[key];
                 let color = t.status === 'completed' ? 'bg-success' : 'bg-danger';
-                
                 return '<div class="mb-2 p-2 border-bottom d-flex justify-content-between align-items-center">' +
                     '<div>' +
                         '<strong>📁 ' + t.file_path + '</strong> ' +
                         '<span class="badge bg-secondary font-monospace">' + t.type.toUpperCase() + '</span>' +
-                        '<br><small class="text-muted">最後狀態: ' + (t.stage || '已結束') + '</small>' +
+                        '<br><small class="text-muted">結束步驟: ' + (t.stage || '已結束') + '</small>' +
                         (t.error_msg ? '<span class="text-danger small ms-2">⚠️ ' + t.error_msg + '</span>' : '') +
                     '</div>' +
                     '<div class="text-end">' +
                         '<span class="badge ' + color + '">' + t.status.toUpperCase() + '</span>' +
-                        '<div class="history-time mt-1">🕒 ' + t.saved_at + '</div>' +
+                        '<div class="history-time mt-1 text-success">⚙️ 轉換完成: ' + t.converted_at + '</div>' +
                     '</div>' +
                 '</div>';
             }).join('');
         }
 
-		// ✨ 非同步調用獲取 VCS 修改歷史
         async function openVcsHistory(fileName) {
             try {
                 const res = await fetch('/api/versions?file=' + encodeURIComponent(fileName));
@@ -175,7 +158,6 @@
                 if (!records || records.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted p-3">這是最初始的版本，尚未被覆蓋修改過</td></tr>';
                 } else {
-                    // 最新演進放在最上面
                     records.reverse();
                     tbody.innerHTML = records.map(function(v) {
                         return '<tr>' +
@@ -187,7 +169,6 @@
                     }).join('');
                 }
                 document.getElementById('vcsHistoryCard').style.display = 'block';
-                // 滾動檢視
                 document.getElementById('vcsHistoryCard').scrollIntoView({ behavior: 'smooth' });
             } catch (e) { alert('無法讀取版本控制資料'); }
         }
@@ -196,12 +177,10 @@
             const selector = document.getElementById('fileSelector');
             const report = document.getElementById('uploadReport');
             if (!selector.files.length) { alert('請選取要上傳的檔案'); return; }
-
             const fd = new FormData();
             fd.append('file', selector.files[0]);
             report.className = "mt-2 small text-warning";
             report.innerText = "檔案傳輸中...";
-
             try {
                 const res = await fetch('/api/upload', { method: 'POST', body: fd });
                 const data = await res.json();
@@ -214,40 +193,31 @@
             } catch(e) { report.className = "mt-2 small text-danger"; report.innerText = "網路連線異常"; }
         }
 
-		// 增強修正：依時間排序，最新一筆 10 分鐘內自動加上 ➕ 小圖示，提示使用者這是剛剛上傳的檔案
         async function refreshFiles() {
             try {
                 const res = await fetch('/api/files');
                 const list = await res.json();
                 const tbody = document.getElementById('fileTableBody');
-                if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted">目前工作資料夾無實體檔案</td></tr>'; return; }
-
-				// 🛠️ 修正：依據最後修改時間從新到舊排序 (Newest first)
-                list.sort(function(a, b) {
-                    return new Date(b.mod_time) - new Date(a.mod_time);
-                });
+                if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted p-3">目前工作資料夾無實體檔案</td></tr>'; return; }
+                
+                list.sort(function(a, b) { return new Date(b.mod_time) - new Date(a.mod_time); });
 
                 const now = new Date();
                 const tenMinutesInMs = 10 * 60 * 1000;
 
                 tbody.innerHTML = list.map(function(f, index) {
                     let prefix = '';
-                    
-                    // 🛠️ index === 0 代表這是最新加入/更改的檔案紀錄
                     if (index === 0) {
                         const fileTime = new Date(f.mod_time);
-                        // 判定是否在 10 分鐘（600,000 毫秒）之內
                         if (now - fileTime <= tenMinutesInMs) {
                             prefix = '<span class="badge bg-success me-2">➕ 最新上傳</span> ';
                         }
                     }
-
                     const displayTime = new Date(f.mod_time).toLocaleString();
-
                     return '<tr>' +
-                        '<td>' + prefix + '<strong>' + f.name + '</strong></td>' +
+                        '<td class="ps-3">' + prefix + '<strong>' + f.name + '</strong></td>' +
                         '<td>' + f.size.toLocaleString() + '</td>' +
-						'<td><span class="text-secondary font-monospace small">' + displayTime + '</span></td>' +
+                        '<td><span class="text-secondary font-monospace small">' + displayTime + '</span></td>' +
                         '<td class="text-center"><button class="btn btn-outline-info btn-sm" onclick="openVcsHistory(\'' + f.name + '\')">📜 歷史版本</button></td>' +
                     '</tr>';
                 }).join('');
@@ -258,17 +228,11 @@
             try {
                 const res = await fetch('/api/tasks');
                 const tasks = await res.json();
-                
-                // 核心改動：將抓取到的資料丟給持久化同步器
                 const isUpdated = syncTasksToHistory(tasks);
-                if (isUpdated) {
-                    renderHistoryUI();
-                }
+                if (isUpdated) { renderHistoryUI(); }
 
                 const box = document.getElementById('pipelineBox');
-                // 網頁前端篩選：上方面版只顯示「正在執行 (running/processing)」的活躍任務
                 const activeTasks = tasks.filter(t => t.status === 'running' || t.status === 'processing');
-
                 if(!activeTasks || activeTasks.length === 0) { 
                     box.innerHTML = '<span class="text-muted">目前無活躍中任務 (已完成或失敗的任務請見下方歷史存檔)</span>'; 
                     return; 
@@ -276,21 +240,14 @@
 
                 box.innerHTML = activeTasks.map(function(t) {
                     let color = 'bg-primary';
-
-					// 🛠️ 如果任務進度已經達到 100% (例如被跳過或在收尾階段)，進度條直接顯示綠色 (bg-success)
-					if (t.percent === 100) {
-						color = 'bg-success';
-					} else if (t.status === 'failed') {
-						color = 'bg-danger';
-					}
-
+                    if (t.percent === 100) { color = 'bg-success'; } 
+                    else if (t.status === 'failed') { color = 'bg-danger'; }
+                    
                     let stageInfo = ' <br><small class="text-secondary">當前步驟: <strong>' + (t.stage || '調度中') + '</strong></small>';
-
                     return '<div class="mb-3 border-bottom pb-2">' +
                         '<div class="d-flex justify-content-between font-weight-bold">' +
                             '<span>📁 ' + t.file_path + ' <span class="badge bg-light text-dark font-monospace">' + t.type.toUpperCase() + '</span></span>' +
-							// 如果百分比是 100, Badge 顯示 SUCCESS 會比 PROCESSING 更精準
-            				'<span class="badge ' + (t.percent === 100 ? 'bg-success' : 'bg-info') + '">' + (t.percent === 100 ? 'SUCCESS' : t.status.toUpperCase()) + '</span>' +
+                            '<span class="badge ' + (t.percent === 100 ? 'bg-success' : 'bg-info') + '">' + (t.percent === 100 ? 'SUCCESS' : t.status.toUpperCase()) + '</span>' +
                         '</div>' +
                         stageInfo +
                         '<div class="progress mt-2" style="height: 18px;">' +
@@ -302,16 +259,12 @@
                 }).join('');
             } catch(e) { console.error(e); }
         }
-			
-		// 2. 🔥 關鍵修正：將定時器與初始化移入 DOMContentLoaded 中，確保 HTML 載入完畢才執行
-		document.addEventListener('DOMContentLoaded', function() {
-			refreshFiles(); 
-			renderHistoryUI();
-			refreshPipelines();
-			
-			setInterval(refreshFiles, 4000);
-			setInterval(refreshPipelines, 1500);
-		});
+
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshFiles(); renderHistoryUI(); refreshPipelines();
+            setInterval(refreshFiles, 4000);
+            setInterval(refreshPipelines, 1500);
+        });
     </script>
 </body>
 </html>
