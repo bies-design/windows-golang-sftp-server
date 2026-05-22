@@ -71,9 +71,19 @@ func main() {
 	viper.SetDefault("MAX_UPLOADS", 5)
 	viper.SetDefault("MAX_DOWNLOADS", 5)
 
-	viper.SetEnvPrefix("SFTP_")
-	viper.AutomaticEnv()
+	// ✨ 指定 Viper 去讀取本地的 .env 檔案作為設定檔, 此處不用遵守 EnvPrefix 規範
+	viper.SetConfigFile(".env")
+	viper.SetConfigType("env")
+	if err := viper.ReadInConfig(); err != nil {
+		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
+		log.Printf("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數: %v", err)
+	}
 
+	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾
+	viper.SetEnvPrefix("INT_BIM_CH_")
+	// 允許從環境變數讀取設定，例如 SFTP_PORT, API_PORT, DATA_DIR 等
+	viper.AutomaticEnv() 
+	// 允許從命令列參數讀取設定，優先於環境變數
 	flag.String("sftp-port", "", "SFTP 監聽的 Port")
 	flag.String("data-dir", "", "檔案儲存的根目錄")
 	flag.Parse()

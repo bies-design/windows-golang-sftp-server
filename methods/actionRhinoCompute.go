@@ -142,6 +142,9 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		},
 	}
 
+	log.Printf("🔍 呼叫 Rhino Compute 進行轉換:\n輸入: %s\n輸出: %s\n", formattedInput, formattedOutput)
+	log.Printf("📡 Post Data Raw (json): %+v\n", payload)
+
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("序列化 Rhino Compute 請求失敗: %v", err)
