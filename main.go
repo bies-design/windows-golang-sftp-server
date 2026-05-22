@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	// 統一引入 models 套件
-	"sftp-server/models"
+	"intelligent-bim-data-conversion-hub/models"
 )
 //go:embed index.html
 var webAssets embed.FS

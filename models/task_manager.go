@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"sftp-server/methods"
+	"intelligent-bim-data-conversion-hub/methods"
 )
 
 // Task 記錄單一上傳或下載任務的狀態 (公開欄位以利 JSON 序列化)

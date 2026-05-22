@@ -1,4 +1,4 @@
-module sftp-server
+module intelligent-bim-data-conversion-hub
 
 go 1.25.10
 

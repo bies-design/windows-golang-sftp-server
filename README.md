@@ -51,7 +51,7 @@ PATH="$HOME\.g\bin:$GOROOT\bin:$PATH"
 
 ### dependent
 ```bash
-go mod init sftp-server
+go mod init intelligent-bim-data-conversion-hub
 go get github.com/pkg/sftp
 go get golang.org/x/crypto/ssh
 go get github.com/spf13/viper
