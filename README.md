@@ -60,11 +60,21 @@ go mod tidy
 ```
 
 ### start
+example <br/>
 ```bash
 $ go run main.go --sftp-port=3022 --data-dir=/d/readyToConvert
 ----
 2026/05/20 18:00:26 [API] 伺服器已啟動，監聽 Port: 8088
 2026/05/20 18:00:26 [SFTP] 伺服器已啟動，監聽 Port: 3022, 儲存目錄: D:/readyToConvert
+```
+研發時期 <br/>
+```bash
+go test -v -run TestRunServer -timeout 0
+```
+正式機組 <br/>
+```bash
+go build -o bim_conversion_hub.exe main.go
+./bim_conversion_hub.exe
 ```
 
 ### build
