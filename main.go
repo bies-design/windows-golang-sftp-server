@@ -40,8 +40,12 @@ func initDirectoriesWithTimeout(dataDir string, timeout time.Duration) error {
 			ch <- fmt.Errorf("無法建立根目錄: %v", err)
 			return
 		}
-		if err := os.MkdirAll(filepath.Join(dataDir, "toGlb"), 0755); err != nil {
-			ch <- fmt.Errorf("無法建立 toGlb 目錄: %v", err)
+		if err := os.MkdirAll(filepath.Join(dataDir, "3dm"), 0755); err != nil {
+			ch <- fmt.Errorf("無法建立 3dm 目錄: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(dataDir, "glb"), 0755); err != nil {
+			ch <- fmt.Errorf("無法建立 glb 目錄: %v", err)
 			return
 		}
 		if err := os.MkdirAll(filepath.Join(dataDir, "frag"), 0755); err != nil {
@@ -134,9 +138,9 @@ func main() {
 
 		// 功能 1：顯示當前 working folder ，程序重啟時，網頁一呼叫此 API 就會自動從實體磁碟載入
 		http.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
-			files, err := os.ReadDir(dataDir)
+			files, err := os.ReadDir(filepath.Join(dataDir, "3dm"))
 			if err != nil {
-				http.Error(w, "無法讀取工作目錄", http.StatusInternalServerError)
+				http.Error(w, "無法讀取 3dm 目錄", http.StatusInternalServerError)
 				return
 			}
 			type FileItem struct {
@@ -164,7 +168,7 @@ func main() {
 
 		// ✨ API：動態掃描並獲取已產出的 GLB 檔案清單
 		http.HandleFunc("/api/files/glb", func(w http.ResponseWriter, r *http.Request) {
-			files, err := os.ReadDir(filepath.Join(dataDir, "toGlb"))
+			files, err := os.ReadDir(filepath.Join(dataDir, "glb"))
 			if err != nil { http.Error(w, "無法讀取 GLB 目錄", http.StatusInternalServerError); return }
 			type FileItem struct { Name string `json:"name"`; Size int64 `json:"size"`; ModTime time.Time `json:"mod_time"` }
 			var list []FileItem
@@ -225,7 +229,7 @@ func main() {
 
 			// 防禦 Directory Traversal 攻擊
 			safeName := filepath.Base(header.Filename)
-			fullPath := filepath.Join(dataDir, safeName)
+			fullPath := filepath.Join(dataDir, "3dm/", safeName)
 
 			// ✨ 核心 VCS 插入點：網頁端覆蓋前同樣進行歷史備份
 			taskMgr.BackupExistingFile(dataDir, safeName)

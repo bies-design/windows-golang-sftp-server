@@ -164,13 +164,14 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 	}
 
 	// 解析出純檔名（不含副檔名）以利路徑分流
-	baseDir := filepath.Dir(fullPath)
+	threedmDir := filepath.Dir(fullPath) // 3dm 檔案所在的目錄, 但需要在上一層
+	baseDir := filepath.Dir(threedmDir) // 上一層目錄
 	fileName := filepath.Base(fullPath)
 	ext := filepath.Ext(fileName)
 	pureName := fileName[:len(fileName)-len(ext)]
 
-	// ✨ 新增調整：將產出檔案引導至專屬子資料夾 toGlb 與 frag
-	glbPath := filepath.Join(baseDir, "toGlb", pureName+".glb")
+	// ✨ 新增調整：將產出檔案引導至專屬子資料夾 glb 與 frag
+	glbPath := filepath.Join(baseDir, "glb", pureName+".glb")
 	zipPath := filepath.Join(baseDir, "frag", pureName+"_processed.zip")
 
 	// === 階段 1: 3dm to glb (rhino.compute) ===
