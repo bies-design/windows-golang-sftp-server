@@ -133,25 +133,25 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		CacheSolve: false,
 		Values: []RhinoValue{
 			{
-				ParamName: "RH_IN:input_path",
+				ParamName: "input_path",
 				InnerTree: map[string][]TreeData{
 					"{0}": {{Type: "System.String", Data: formattedInput}},
 				},
 			},
 			{
-				ParamName: "RH_IN:output_path",
+				ParamName: "output_path",
 				InnerTree: map[string][]TreeData{
 					"{0}": {{Type: "System.String", Data: formattedOutput}},
 				},
 			},
 			{
-				ParamName: "RH_IN:convert_precision",
+				ParamName: "convert_precision",
 				InnerTree: map[string][]TreeData{
 					"{0}": {{Type: "System.Double", Data: 0.6}},
 				},
 			},
 			{
-				ParamName: "RH_IN:is_double_sided",
+				ParamName: "is_double_sided",
 				InnerTree: map[string][]TreeData{
 					"{0}": {{Type: "System.Boolean", Data: false}},
 				},
@@ -185,11 +185,11 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes, ioErr := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Rhino Compute 錯誤回應 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes))
-	} else if err != nil {
-		return fmt.Errorf("讀取 Rhino Compute 回應內容失敗: %v", err)
+	} else if ioErr != nil {
+		return fmt.Errorf("讀取 Rhino Compute Server 回應內容失敗: %v", ioErr)
 	} else {
 		// 🟢 核心安全修正：開始進行業務邏輯層的 JSON 解析與檢查
 		var computeResp RhinoComputeResponse
@@ -203,6 +203,14 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		var foundResultField bool
 		for _, val := range computeResp.Values {
 			if val.ParamName == "RH_OUT:result" {
+				// 🟢 修正防禦：如果 InnerTree 是空的，代表上游元件連動都沒動就死鎖或斷線了
+				if len(val.InnerTree) == 0 {
+					rawJSONStr := string(bodyBytes)
+					executionResult = "轉檔腳本未輸出任何數據 (InnerTree 為空)。 回應內容: %s" + rawJSONStr
+					foundResultField = true // 雖然沒拿到預期的結果，但至少找到了對應的輸出欄位，避免重複報錯
+					break
+				}
+
 				// 取出樹狀分支 "{0}" 中的第一個節點資料
 				if treeBranch, exists := val.InnerTree["{0}"]; exists && len(treeBranch) > 0 {
 					executionResult = treeBranch[0].Data
@@ -214,7 +222,7 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 
 		// 驗證 1：防呆，如果連對應的輸出欄位都沒找到，代表腳本配置有誤
 		if !foundResultField {
-			return fmt.Errorf("轉檔異常：Rhino Compute 回應中缺漏 'RH_OUT:result' 輸出欄位")
+			return fmt.Errorf("轉檔異常：Rhino Compute 回應中缺漏 'RH_OUT:result' 輸出欄位, 反饋內容: %s", string(bodyBytes))
 		}
 
 		// 驗證 2：精確檢查是否包含 C# 內定義的「轉檔成功」字串
