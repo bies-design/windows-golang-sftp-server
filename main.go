@@ -296,14 +296,11 @@ func main() {
 			}
 		})
 
-		utilities.Info("🟢 [API] 伺服器已啟動，監聽 Port: %s", apiPort)
-		if err := http.ListenAndServe(":"+apiPort, nil); err != nil {
+		utilities.Info("🟢 [API] http 伺服器啟動，監聽 Port: %s", apiPort)
+		err := http.ListenAndServe(":"+apiPort, nil); 
+		if err != nil {
 			utilities.Error("❌ API http 伺服器啟動失敗: %v", err)
-		}
-		else {
-			utilities.Warn("🔥 API 核心, http 服務啟動")
-		}
-
+		} 
 	}()
 
 	// ==================== 4. SSH 配置 ====================
