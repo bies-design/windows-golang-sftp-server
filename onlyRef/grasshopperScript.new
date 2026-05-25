@@ -1,0 +1,176 @@
+// Grasshopper Script Instance
+#region Usings
+using System;
+using System.Linq;
+using System.Collections;
+using System.Collections.Generic;
+using System.Drawing;
+
+using Rhino;
+using Rhino.Geometry;
+
+using Grasshopper;
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Data;
+using Grasshopper.Kernel.Types;
+#endregion
+
+public class Script_Instance : GH_ScriptInstance
+{
+    #region Notes
+    /* Members:
+        RhinoDoc RhinoDocument
+        GH_Document GrasshopperDocument
+        IGH_Component Component
+        int Iteration
+
+      Methods (Virtual & overridable):
+        Print(string text)
+        Print(string format, params object[] args)
+        Reflect(object obj)
+        Reflect(object obj, string method_name)
+    */
+    #endregion
+
+    private void RunScript(
+    double conversionPrecision,
+    string inputFilePath,
+    string outputFilePath,
+    bool isDoubleSided,
+    ref object runtimeLog)
+    {
+        runtimeLog = null;
+
+        if (string.IsNullOrEmpty(inputFilePath) || string.IsNullOrEmpty(outputFilePath)) {
+            runtimeLog = "路徑不能為空";
+            return;
+        }
+
+        // 暫存原本的作用中文件，避免污染環境
+        RhinoDoc originalDoc = RhinoDoc.ActiveDoc;
+
+        try {
+            // 1. 建立一個虛擬的 Rhino 文件並匯入 3dm 檔案
+            RhinoDoc doc = RhinoDoc.CreateHeadless(null);
+            RhinoDoc.ActiveDoc = doc;
+
+            bool importSuccess = doc.Import(inputFilePath);
+            if (!importSuccess) {
+                runtimeLog = "3dm 檔案匯入失敗，請檢查路徑是否正確，或檔案是否被其他程序鎖定";
+                doc.Dispose();
+                RhinoDoc.ActiveDoc = originalDoc;
+                return;
+            }
+
+            // ----------------------------------------------------
+            // 調整 NURBS 轉 Mesh 的精細度 (參數 conversionPrecision)
+            // ----------------------------------------------------
+            Rhino.Geometry.MeshingParameters meshParams;
+        
+            if (conversionPrecision == -1) {
+                meshParams = Rhino.Geometry.MeshingParameters.QualityRenderMesh;
+            } else {
+                double density = Math.Max(0.0, Math.Min(1.0, conversionPrecision));
+                meshParams = new Rhino.Geometry.MeshingParameters(density);
+            }
+
+            // 手動將虛擬文件中的所有物件設為「選取狀態」
+            if (doc.Objects.Count == 0) {
+                runtimeLog = "轉檔失敗：文件中沒有任何物件 (匯入 3dm 失敗或該 3dm 為空)。";
+                doc.Dispose(); // 補上釋放避免記憶體殘留
+                return;
+            }
+
+            // 將自訂網格參數指定給虛擬文件中的每個物件，同時將物件設為選取狀態
+            foreach (var obj in doc.Objects)
+            {
+                Rhino.DocObjects.ObjectAttributes attributes = obj.Attributes.Duplicate();
+                attributes.CustomMeshingParameters = meshParams;
+                doc.Objects.ModifyAttributes(obj, attributes, true);
+                obj.Select(true);
+            }
+        
+            int selectedCount = 0;
+            foreach (var obj in doc.Objects) {
+                if (obj.IsSelected(false) > 0) selectedCount++;
+            }
+            
+            if (selectedCount == 0) {
+                runtimeLog = "轉檔失敗：物件未處於選取狀態，匯出指令無法作用。";
+                doc.Dispose();
+                return;
+            }
+
+            // 2. 宣告 Rhino 8 原生的 glTF/glb 匯出選項
+            Rhino.FileIO.FileGltfWriteOptions options = new Rhino.FileIO.FileGltfWriteOptions();
+            options.MapZToY = true;          
+            options.ExportMaterials = true;   
+            options.ExportOpenMeshes = true;  
+            options.CullBackfaces = isDoubleSided;
+
+            // 3. 直接呼叫底層 API 寫入檔案
+            RhinoApp.ClearCommandHistoryWindow();
+            bool exportSuccess = Rhino.FileIO.FileGltf.Write(outputFilePath, doc, options);
+
+            // 清理選取狀態
+            doc.Objects.UnselectAll();
+
+            // 4. 釋放文件記憶體
+            doc.Dispose();
+
+            if (exportSuccess) {
+                runtimeLog = "轉檔成功！檔案已儲存至：" + outputFilePath;
+            } else {
+                // 讀取命令列歷史
+                string errorLog = RhinoApp.CommandHistoryWindowText;
+                
+                // ✨ 核心升級 1：如果命令列空空如也，則自動掃描畫布上是否有其他元件亮黃燈或紅燈
+                string ghCanvasErrors = GetGrasshopperCanvasErrors();
+
+                if (!string.IsNullOrWhiteSpace(ghCanvasErrors)) {
+                    runtimeLog = "轉檔失敗。畫布元件異常詳細訊息：\n" + ghCanvasErrors;
+                } else if (!string.IsNullOrWhiteSpace(errorLog)) {
+                    runtimeLog = "轉檔失敗。Rhino 內部詳細訊息：\n" + errorLog;
+                } else {
+                    runtimeLog = string.Format("轉檔失敗：Rhino.FileIO.FileGltf.Write 回傳 false。原因可能為：目標目錄不存在、權限拒絕、或 Windows Smart App Control 攔截。輸入路徑: {0}, 輸出路徑: {1}", inputFilePath, outputFilePath);
+                }
+            }
+        }
+        catch (Exception ex) {
+            // ✨ 核心升級 2：捕捉 Exception 時，一併附上 StackTrace 精確定位 C# 崩潰在哪一行
+            runtimeLog = string.Format("執行發生嚴重異常: {0}\n詳細追蹤:\n{1}", ex.Message, ex.StackTrace);
+        }
+        finally {
+            // 5. 確保無論如何都會還原原本的文件狀態
+            RhinoDoc.ActiveDoc = originalDoc;
+        }
+    }
+
+    // ✨ 新增輔助方法：遍歷當前 Grasshopper 文件中所有錯誤元件的訊息
+    private string GetGrasshopperCanvasErrors()
+    {
+        if (GrasshopperDocument == null) return string.Empty;
+
+        List<string> errorMessages = new List<string>();
+
+        foreach (var docObject in GrasshopperDocument.Objects)
+        {
+            var component = docObject as GH_Component;
+            if (component != null)
+            {
+                // 檢查元件是否處於 警告(黃色) 或 錯誤(紅色) 狀態
+                if (component.RuntimeMessageLevel == GH_RuntimeMessageLevel.Error || 
+                    component.RuntimeMessageLevel == GH_RuntimeMessageLevel.Warning)
+                {
+                    var name = component.Name;
+                    var nickname = component.NickName;
+                    var messages = component.RuntimeMessages(component.RuntimeMessageLevel);
+                    
+                    errorMessages.Add(string.Format("-> 元件 [{0} ({1})]: {2}", name, nickname, string.Join("; ", messages)));
+                }
+            }
+        }
+
+        return string.Join("\n", errorMessages);
+    }
+}

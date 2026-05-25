@@ -85,7 +85,7 @@ func main() {
 	viper.SetConfigType("env")
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
-		utilities.Info("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數", "error", err)
+		utilities.Info("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
 	}
 
 	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾

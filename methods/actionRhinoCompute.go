@@ -19,7 +19,7 @@ import (
 type RhinoComputePayload struct {
 	Algo       interface{}  `json:"algo"`
 	Pointer    string       `json:"pointer"`
-	CacheSolve bool         `json:"cachesolve"`
+	CacheSolve bool         `json:"CacheSolve"`
 	Values     []RhinoValue `json:"values"`
 }
 
@@ -29,8 +29,24 @@ type RhinoValue struct {
 }
 
 type TreeData struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
+	Type string      `json:"Type"`
+	Data interface{} `json:"Data"`
+}
+
+// --- Rhino Compute API 回傳回應解算結構體 ---
+
+type RhinoComputeResponse struct {
+	Values []RhinoResponseValue `json:"values"`
+}
+
+type RhinoResponseValue struct {
+	ParamName string                           `json:"ParamName"`
+	InnerTree map[string][]ResponseTreeData    `json:"InnerTree"`
+}
+
+type ResponseTreeData struct {
+	Type string `json:"type"`
+	Data string `json:"data"` // 因為結果描述一定是字串，這裡可以直接宣告為 string
 }
 
 // CallRhinoCompute 負責將實體 3dm 檔案透過 HTTP POST 送至 Rhino Compute 進行解算轉檔
@@ -143,13 +159,15 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		},
 	}
 
-	utilities.Debug("🔍 呼叫 Rhino Compute 進行轉換:\n輸入: %s\n輸出: %s\n", formattedInput, formattedOutput)
-	utilities.Debug("📡 Post Data Raw (json): %+v\n", payload)
-
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("序列化 Rhino Compute 請求失敗: %v", err)
 	}
+
+	utilities.Debug("🔍 呼叫 Rhino Compute 進行轉換:")
+	utilities.Debug("輸入路徑: %s", formattedInput)
+    utilities.Debug("輸出路徑: %s", formattedOutput)
+	utilities.Debug("📡 Post Data Raw (json): %s", string(jsonData))
 
 	client := &http.Client{
 		Timeout: 90 * time.Second, // Rhino Compute 可能需要較長時間處理大型檔案
@@ -170,8 +188,44 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Rhino Compute 錯誤回應 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes))
+	} else if err != nil {
+		return fmt.Errorf("讀取 Rhino Compute 回應內容失敗: %v", err)
 	} else {
-		utilities.Debug("✅ Rhino Compute 成功回應: %s\n", string(bodyBytes))
+		// 🟢 核心安全修正：開始進行業務邏輯層的 JSON 解析與檢查
+		var computeResp RhinoComputeResponse
+
+		if err := json.Unmarshal(bodyBytes, &computeResp); err != nil {
+			return fmt.Errorf("無法解析 Rhino Compute 的回應 JSON: %v", err)
+		}
+
+		// 巡檢回傳的 values 陣列，找出關鍵的輸出欄位 "RH_OUT:result"
+		var executionResult string
+		var foundResultField bool
+		for _, val := range computeResp.Values {
+			if val.ParamName == "RH_OUT:result" {
+				// 取出樹狀分支 "{0}" 中的第一個節點資料
+				if treeBranch, exists := val.InnerTree["{0}"]; exists && len(treeBranch) > 0 {
+					executionResult = treeBranch[0].Data
+					foundResultField = true
+					break
+				}
+			}
+		}
+
+		// 驗證 1：防呆，如果連對應的輸出欄位都沒找到，代表腳本配置有誤
+		if !foundResultField {
+			return fmt.Errorf("轉檔異常：Rhino Compute 回應中缺漏 'RH_OUT:result' 輸出欄位")
+		}
+
+		// 驗證 2：精確檢查是否包含 C# 內定義的「轉檔成功」字串
+		// 註：因為回傳值可能帶有 JSON 序列化遺留的轉義雙引號 (如 "\"轉檔成功\"")，使用 strings.Contains 最穩健
+		if !strings.Contains(executionResult, "轉檔成功") {
+			// 這裡會直接把 C# 拋出的 "執行發生嚴重異常: ... at Rhino.RhinoDoc.Import" 完整字串捕獲並回報給 Pipeline
+			return fmt.Errorf("轉檔管線業務邏輯失敗，伺服器反饋：\n%s", executionResult)
+		}
+		
+		// 真正大功告成
+		utilities.Info("✅ Rhino Compute 轉檔任務完全成功！反饋資訊: %s", executionResult)
 	}
 
 	return nil
