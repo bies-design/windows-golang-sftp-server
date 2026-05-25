@@ -7,7 +7,7 @@ import (
 	"fmt"			// 補上此行：用於第 145 行的 fmt.Fprintf
 	"path/filepath" // 補上此行：用於第 114, 115, 138 行的 filepath 操作
 	"io"
-	"log"
+	// "log"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +22,8 @@ import (
 
 	// 統一引入 models 套件
 	"intelligent-bim-data-conversion-hub/models"
+
+	"intelligent-bim-data-conversion-hub/utilities"
 )
 //go:embed index.html
 var webAssets embed.FS
@@ -70,13 +72,20 @@ func main() {
 	viper.SetDefault("DATA_DIR", "./sftp_data")
 	viper.SetDefault("MAX_UPLOADS", 5)
 	viper.SetDefault("MAX_DOWNLOADS", 5)
+	viper.SetDefault("LOG_LEVEL", "debug")
+	
+	// 初始化日誌，預設為 Info 等級（隱藏 Debug）
+	utilities.InitLogger((viper.GetString("LOG_LEVEL")), true, "") // 預設啟用自動換行，使用預設換行符號
+	
+	utilities.Info("系統啟動中...") 
+	utilities.Debug("這條「會」被印出來！因為等級已經調低到 Debug 了")
 
 	// ✨ 指定 Viper 去讀取本地的 .env 檔案作為設定檔, 此處不用遵守 EnvPrefix 規範
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
-		log.Printf("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數: %v", err)
+		utilities.Info("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數", "error", err)
 	}
 
 	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾
@@ -98,9 +107,9 @@ func main() {
 	maxDownloads := viper.GetInt("MAX_DOWNLOADS")
 
     // ✨ 核心修正：引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
-	log.Printf("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
+	utilities.Info("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
 	if err := initDirectoriesWithTimeout(dataDir, 5*time.Second); err != nil {
-		log.Fatalf("❌ 啟動失敗 ── %v", err)
+		utilities.Error("❌ 啟動失敗 ── %v", err)
 	}
 
 	// ==================== 2. 實例初始化 (調用 models) ====================
@@ -287,8 +296,13 @@ func main() {
 			}
 		})
 
-		log.Printf("🟢 [API] 伺服器已啟動，監聽 Port: %s", apiPort)
-		log.Fatal(http.ListenAndServe(":"+apiPort, nil)) // 🔥 API 核心, 此行有加入才會真正運行 http 服務，也才有網頁
+		utilities.Info("🟢 [API] 伺服器已啟動，監聽 Port: %s", apiPort)
+		if err := http.ListenAndServe(":"+apiPort, nil); err != nil {
+			utilities.Error("❌ API http 伺服器啟動失敗: %v", err)
+		}
+		else {
+			utilities.Warn("🔥 API 核心, http 服務啟動")
+		}
 
 	}()
 
@@ -300,7 +314,7 @@ func main() {
 	// 這樣不論圖形化工具送出什麼帳號、密碼，伺服器都會正常回傳「通過」，避免工具無所適從
 	config := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			log.Printf("[Auth] 使用者 %s 正在嘗試登入", c.User())
+			utilities.Info("[Auth] 使用者 %s 正在嘗試登入", c.User())
 			return nil, nil // 返回 nil 代表密碼驗證成功，允許登入
 		},
 	}
@@ -309,21 +323,21 @@ func main() {
 	// ==================== 5. 啟動 SFTP 服務 ====================
 	listener, err := net.Listen("tcp", ":"+sftpPort) // 🔥 SFTP 核心
 	if err != nil {
-		log.Fatalf("無法監聽 SFTP Port: %v", err)
+		utilities.Error("無法監聽 SFTP Port: %v", err)
 	}
-	log.Printf("🟢 [SFTP] 伺服器已啟動, 監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
+	utilities.Info("🟢 [SFTP] 伺服器已啟動, 監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
 
 	for {
 		nConn, err := listener.Accept()
 		if err != nil {
-			log.Printf("接受 TCP 連線失敗: %v", err)
+			utilities.Info("接受 TCP 連線失敗: %v", err)
 			continue
 		}
 
 		go func(conn net.Conn) {
 			_, chans, reqs, err := ssh.NewServerConn(conn, config)
 			if err != nil {
-				log.Printf("SSH 握手失敗: %v", err)
+				utilities.Info("SSH 握手失敗: %v", err)
 				return
 			}
 			go ssh.DiscardRequests(reqs)

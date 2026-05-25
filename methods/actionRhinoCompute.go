@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 	"strings"
-	"log"
 
 	"github.com/spf13/viper"
+	"intelligent-bim-data-conversion-hub/utilities"
 )
 
 // --- Rhino Compute API 專用請求結構體 ---
@@ -143,8 +143,8 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		},
 	}
 
-	log.Printf("🔍 呼叫 Rhino Compute 進行轉換:\n輸入: %s\n輸出: %s\n", formattedInput, formattedOutput)
-	log.Printf("📡 Post Data Raw (json): %+v\n", payload)
+	utilities.Debug("🔍 呼叫 Rhino Compute 進行轉換:\n輸入: %s\n輸出: %s\n", formattedInput, formattedOutput)
+	utilities.Debug("📡 Post Data Raw (json): %+v\n", payload)
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -167,9 +167,11 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("Rhino Compute 錯誤回應 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes))
+	} else {
+		utilities.Debug("✅ Rhino Compute 成功回應: %s\n", string(bodyBytes))
 	}
 
 	return nil
