@@ -172,7 +172,7 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// ✨ 新增調整：將產出檔案引導至專屬子資料夾 glb 與 frag
 	glbPath := filepath.Join(baseDir, "glb", pureName+".glb")
-	zipPath := filepath.Join(baseDir, "frag", pureName+"_processed.zip")
+	fragpath := filepath.Join(baseDir, "frag") // 這裡 frag 目錄會放置轉換後的一堆檔案（.frag + 材質貼圖）
 
 	// === 階段 1: 3dm to glb (rhino.compute) ===
 	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
@@ -185,22 +185,25 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 
 	// === 階段 2: glb to fragment+材質包 (thatopen, nodejs project) ===
 	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "processing", "")
-	if err := callThatOpenConverter(glbPath, zipPath); err != nil {
-		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", err))
+	result := callThatOpenConverter(glbPath, fragpath)
+	if result.Error != nil {
+		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", result.Error))
 		return
 	}
 	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 100, "processing", "")
 	time.Sleep(800 * time.Millisecond)
 
 	// === 階段 3: frag. + 材質包壓縮檔案 上傳到 seaweedfs ===
+	// 注意：這裡的 result 物件已經包含了 callThatOpenConverter 的完整回報，
+	// 包括轉檔錯誤、轉檔結果以及壓縮包路徑, 讓我們能夠更精準地處理後續的上傳流程
 	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "processing", "")
-	if err := uploadToSeaweedFS(zipPath); err != nil {
+	if err := uploadToSeaweedFS(result.FragResult, result.CompressionFilePath); err != nil {
 		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
 		return
 	}
 
 	// === 階段 4✨ S3 上傳成功紀錄
-	tm.LogS3Upload(baseDir, pureName+"_processed.zip", true, "")
+	tm.LogS3Upload(baseDir, pureName+"frag&zip", true, "")
 	
 	// 全部完成
 	tm.mu.Lock()
@@ -231,14 +234,20 @@ func callRhinoCompute(pathType string, inputPath string, outputPath string) erro
 	return methods.CallRhinoCompute(pathType, inputPath, outputPath)
 }
 
-func callThatOpenConverter(glbPath string, outputZipPath string) error {
+func callThatOpenConverter(glbPath string, outputZipPath string) methods.GlbToFragResult {
 	// 實際操作：使用 exec.Command("node", "convert.js", glbPath) 調用 Node.js 服務
-	time.Sleep(2 * time.Second)
-	return nil
+	
+	// 額外加上把材質包(資料夾)壓縮成為 *.zip
+	return methods.CallGlbtoFreg(glbPath, outputZipPath)
 }
 
-func uploadToSeaweedFS(zipPath string) error {
+func uploadToSeaweedFS(fragStorePath string, compressionPath string) error {
 	// 實際操作：將產出的壓縮材質包上傳到 SeaweedFS 分散式儲存
-	time.Sleep(1 * time.Second)
+	err := methods.UploadToSeaweedFS(fragStorePath, compressionPath)
+	if err != nil {
+		// 讓狀態機捕獲錯誤並進行任務重試或回報異常
+		return fmt.Errorf("Task Manager 上傳步驟失敗: %v", err)
+	}
+
 	return nil
 }

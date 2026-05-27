@@ -54,13 +54,20 @@ PATH="$HOME\.g\bin:$GOROOT\bin:$PATH"
 go mod init intelligent-bim-data-conversion-hub
 go get github.com/pkg/sftp
 go get golang.org/x/crypto/ssh
+# ------------------aws s3 interface---------------------
+go get github.com/aws/aws-sdk-go-v2
+go get github.com/aws/aws-sdk-go-v2/config
+go get github.com/aws/aws-sdk-go-v2/credentials
+go get github.com/aws/aws-sdk-go-v2/service/s3
+go get github.com/aws/aws-sdk-go-v2/feature/s3/manager
+# ------------------ ^^^^^^^^^^^^^^ ---------------------
 go get github.com/spf13/viper
 go mod tidy
 
 ```
 
 ### start
-example <br/>
+fast start up <br/>
 ```bash
 $ go run main.go --sftp-port=3022 --data-dir=/d/readyToConvert
 ----
@@ -73,7 +80,7 @@ go test -v -run TestRunServer -timeout 0
 ```
 正式機組 <br/>
 ```bash
-go build -o bim_conversion_hub.exe main.go
+go build -o go_bim_data_conversion_hub.exe main.go
 ./bim_conversion_hub.exe
 ```
 

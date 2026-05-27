@@ -198,11 +198,11 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 			return fmt.Errorf("無法解析 Rhino Compute 的回應 JSON: %v", err)
 		}
 
-		// 巡檢回傳的 values 陣列，找出關鍵的輸出欄位 "RH_OUT:result"
+		// 巡檢回傳的 values 陣列，找出關鍵的輸出欄位 "result"
 		var executionResult string
 		var foundResultField bool
 		for _, val := range computeResp.Values {
-			if val.ParamName == "RH_OUT:result" {
+			if val.ParamName == "result" {
 				// 🟢 修正防禦：如果 InnerTree 是空的，代表上游元件連動都沒動就死鎖或斷線了
 				if len(val.InnerTree) == 0 {
 					rawJSONStr := string(bodyBytes)
@@ -222,7 +222,7 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 
 		// 驗證 1：防呆，如果連對應的輸出欄位都沒找到，代表腳本配置有誤
 		if !foundResultField {
-			return fmt.Errorf("轉檔異常：Rhino Compute 回應中缺漏 'RH_OUT:result' 輸出欄位, 反饋內容: %s", string(bodyBytes))
+			return fmt.Errorf("轉檔異常：Rhino Compute 回應中缺漏 'result' 輸出欄位, 反饋內容: %s", string(bodyBytes))
 		}
 
 		// 驗證 2：精確檢查是否包含 C# 內定義的「轉檔成功」字串
