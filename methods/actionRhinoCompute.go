@@ -59,7 +59,7 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 	// 基本上使用預設值即可，除非有特殊需求才修改
 	scriptPath := viper.GetString("RHINO_SCRIPT_PATH")
 	if scriptPath == "" {
-		scriptPath = "D:/Windows Application/Service/scripts/rhino8_to_glb.gh"
+		scriptPath = "D:/Windows Application/Service/scripts/rhino8_to_glb02.gh"
 	}
 
 	// 根據不同的 pathType 進行路徑預處理
@@ -164,9 +164,9 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 		return fmt.Errorf("序列化 Rhino Compute 請求失敗: %v", err)
 	}
 
-	utilities.Debug("🔍 呼叫 Rhino Compute 進行轉換:")
-	utilities.Debug("輸入路徑: %s", formattedInput)
-    utilities.Debug("輸出路徑: %s", formattedOutput)
+	utilities.Info("🔍 呼叫 Rhino Compute 進行轉換:")
+	utilities.Info("輸入路徑: %s", formattedInput)
+    utilities.Info("輸出路徑: %s", formattedOutput)
 	utilities.Debug("📡 Post Data Raw (json): %s", string(jsonData))
 
 	client := &http.Client{
@@ -200,7 +200,7 @@ func CallRhinoCompute(pathType string, inputPath string, outputPath string) erro
 
 		// 巡檢回傳的 values 陣列，找出關鍵的輸出欄位 "result"
 		var executionResult string
-		var foundResultField bool
+		var foundResultField bool = false
 		for _, val := range computeResp.Values {
 			if val.ParamName == "result" {
 				// 🟢 修正防禦：如果 InnerTree 是空的，代表上游元件連動都沒動就死鎖或斷線了
