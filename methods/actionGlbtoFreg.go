@@ -75,6 +75,7 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 		Timeout: 5 * time.Minute,
 	}
 
+	utilities.Info("[🔗 Frag 轉檔] 正在發送轉檔請求至服務: %s\nPayload: %s", remoteURL, string(jsonData))
 	req, err := http.NewRequest("POST", remoteURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return returnResult(fmt.Errorf("建立 HTTP 轉檔請求失敗: %v", err), "", "")
@@ -88,23 +89,38 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 	}
 	defer resp.Body.Close()
 
+	utilities.Info("[🔗 Frag 轉檔] 收到服務回應: 狀態碼 %d", resp.StatusCode)
 	// 5. 讀取回應內容
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return returnResult(fmt.Errorf("讀取 Frag 伺服器回應內容失敗: %v", err), "", "")
 	}
 
-	// 6. 二次防禦：網路層級狀態碼檢查
-	// 即使 Node 內部崩潰 (500)，我們也要先把 Body 抓下來解析詳細錯誤原因，而不是只丟出 500 錯誤
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusInternalServerError {
-		return returnResult(fmt.Errorf("Frag 伺服器網路層級錯誤 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes)), "", "")
-	}
-
-	// 7. 解算 Node 服務回傳的業務 JSON
+	// 6. 解算 Node 服務回傳的業務 JSON
 	var nodeResp GlbToFragResponse
 	if err := json.Unmarshal(bodyBytes, &nodeResp); err != nil {
 		return returnResult(fmt.Errorf("無法解析 Frag 伺服器回應的 JSON (原始內容: %s): %v", string(bodyBytes), err), "", "")
 	}
+
+	// 7. 二次防禦：網路層級狀態碼檢查
+	// 即使 Node 內部崩潰 (500)，我們也要先把 Body 抓下來解析詳細錯誤原因，而不是只丟出 500 錯誤
+	if resp.StatusCode != http.StatusOK || nodeResp.Status == "failed" || nodeResp.Status == "error" {
+		utilities.Warn("[⚠️ Frag 轉檔失敗] HTTP 狀態碼: %d, Node 服務回傳狀態: %s, 訊息: %s", resp.StatusCode, nodeResp.Status, nodeResp.Message)
+		
+		// 優先順序 1：如果 Node.js 有拋出系統層級 error (例如 Pipeline 執行失敗)
+		if nodeResp.Status == "failed" {
+			return returnResult(fmt.Errorf("Frag 伺服器任務執行失敗 錯誤: %s (詳細 Stderr: %s) (過程 Stdout: %s)", nodeResp.Error, nodeResp.Stderr, nodeResp.Stdout), "", "")
+		}
+		
+		// 優先順序 2：如果是路由找不到或參數缺失的 message (例如 404 或 400)
+		if nodeResp.Status == "error" {
+			return returnResult(fmt.Errorf("Frag 伺服器拒絕請求 (狀態碼 %d): %s", resp.StatusCode, nodeResp.Message), "", "")
+		}
+
+		// 備援：如果什麼欄位都沒寫，但狀態碼不對
+		return returnResult(fmt.Errorf("Frag 伺服器網路層級錯誤 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes)), "", "")
+	}
+
 
 	// 8. 🟢 核心原子業務判定：精確檢查 status 是否為 "completed"
 	var compressionFilePath string = "" // 預設為空，除非轉檔成功且 Node 服務回傳了 fragresult 欄位
