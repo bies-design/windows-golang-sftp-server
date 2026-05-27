@@ -113,7 +113,10 @@ func main() {
     // ✨ 核心修正：引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
 	utilities.Info("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
 	if err := initDirectoriesWithTimeout(dataDir, 5*time.Second); err != nil {
-		utilities.Error("❌ 啟動失敗 ── %v", err)
+		utilities.Error("❌ [Working Dir] 啟動失敗 ── %v", err)
+		return // 直接終止程序，避免後續因目錄問題引發更多錯誤
+	} else {
+		utilities.Info("🟢 [Working Dir] 啟用成功: %s", dataDir)
 	}
 
 	// ==================== 2. 實例初始化 (調用 models) ====================
