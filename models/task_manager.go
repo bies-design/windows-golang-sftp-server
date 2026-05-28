@@ -174,36 +174,43 @@ func (tm *Manager) StartPipeline(taskID string, fullPath string) {
 	glbPath := filepath.Join(baseDir, "glb", pureName+".glb")
 	fragpath := filepath.Join(baseDir, "frag") // 這裡 frag 目錄會放置轉換後的一堆檔案（.frag + 材質貼圖）
 
+	// ================================================================
 	// === 階段 1: 3dm to glb (rhino.compute) ===
+	// ================================================================
+	// 🔥 活化前端點：明確告訴前端正在處裡哪個檔案的 GLB 轉換
 	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "processing", "")
 	if err := callRhinoCompute("file", fullPath, glbPath); err != nil {
 		tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 10, "failed", fmt.Sprintf("Rhino 轉換失敗: %v", err))
 		return
 	}
-	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 100, "processing", "")
+	tm.UpdatePipeline(taskID, "1. 3dm to glb (rhino.compute)", 40, "processing", "")
 	time.Sleep(800 * time.Millisecond) // 轉場平滑感
 
 	// === 階段 2: glb to fragment+材質包 (thatopen, nodejs project) ===
-	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "processing", "")
+	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 55, "processing", "")
 	result := callThatOpenConverter(glbPath, fragpath)
 	if result.Error != nil {
-		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 20, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", result.Error))
+		tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 55, "failed", fmt.Sprintf("ThatOpen 轉換失敗: %v", result.Error))
 		return
 	}
-	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 100, "processing", "")
+	tm.UpdatePipeline(taskID, "2. glb to fragment+材質包 (thatopen)", 77, "processing", "")
 	time.Sleep(800 * time.Millisecond)
 
 	// === 階段 3: frag. + 材質包壓縮檔案 上傳到 seaweedfs ===
 	// 注意：這裡的 result 物件已經包含了 callThatOpenConverter 的完整回報，
 	// 包括轉檔錯誤、轉檔結果以及壓縮包路徑, 讓我們能夠更精準地處理後續的上傳流程
-	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "processing", "")
+	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 85, "processing", "")
 	if err := uploadToSeaweedFS(result.FragResult, result.CompressionFilePath); err != nil {
-		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 10, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
+		tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 85, "failed", fmt.Sprintf("SeaweedFS 上傳失敗: %v", err))
 		return
 	}
 
 	// === 階段 4✨ S3 上傳成功紀錄
-	tm.LogS3Upload(baseDir, pureName+"frag&zip", true, "")
+	tm.UpdatePipeline(taskID, "3. 上傳至 SeaweedFS", 100, "completed", "")
+	fragFilename := filepath.Base(result.FragResult)
+	compressionFilename := filepath.Base(result.CompressionFilePath)
+	tm.LogS3Upload(baseDir, fragFilename, true, "")
+	tm.LogS3Upload(baseDir, compressionFilename, true, "")
 	
 	// 全部完成
 	tm.mu.Lock()

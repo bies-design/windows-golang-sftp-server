@@ -153,7 +153,7 @@ func main() {
 			}
 			var list []FileItem
 			for _, f := range files {
-				// ✨ 自動過濾：只加載根目錄檔案，自動排除子資料夾（toGlb與frag不會被錯當成普通檔案列出）
+				// ✨ 自動過濾：只加載根目錄檔案，自動排除子資料夾（glb與frag不會被錯當成普通檔案列出）
 				if !f.IsDir() && f.Name()[0] != '.' { // 同時過濾掉隱藏檔案或資料夾（例如 .versions）
 					info, err := f.Info()
 					if err == nil {
@@ -188,15 +188,48 @@ func main() {
 		http.HandleFunc("/api/files/frag", func(w http.ResponseWriter, r *http.Request) {
 			files, err := os.ReadDir(filepath.Join(dataDir, "frag"))
 			if err != nil { http.Error(w, "無法讀取 Frag 目錄", http.StatusInternalServerError); return }
-			type FileItem struct { Name string `json:"name"`; Size int64 `json:"size"`; ModTime time.Time `json:"mod_time"` }
-			var list []FileItem
-			for _, f := range files {
-				if !f.IsDir() && f.Name()[0] != '.' {
-					info, err := f.Info()
-					if err == nil { list = append(list, FileItem{Name: f.Name(), Size: info.Size(), ModTime: info.ModTime()}) }
-				}
+
+			// 定義允許的副檔名清單（不含點，全小寫方便比對）
+            allowedExts := map[string]bool{
+                "frag":    true,
+                "bz2":     true,
+                "gz":      true,
+                "tar.gz":  true,
+                "tar.bz2": true,
+                "zip":     true,
+            }
+
+			type FileItem struct { 
+				Name string `json:"name"`; 
+				Size int64 `json:"size"`; 
+				ModTime time.Time `json:"mod_time"` 
 			}
-			w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(list)
+			var list []FileItem
+
+			for _, f := range files {
+				name := f.Name()
+
+				// 排除目錄、隱藏檔案，並確保長度安全
+                if f.IsDir() || len(name) == 0 || name[0] == '.' {
+                    continue
+                }
+
+				// 檢查副檔名
+                if !utilities.HasAllowedExt(name, allowedExts) {
+                    continue
+                }
+
+				info, err := f.Info()
+                if err == nil { 
+                    list = append(list, FileItem{
+                        Name:    name, 
+                        Size:    info.Size(), 
+                        ModTime: info.ModTime(),
+                    }) 
+                }
+			}
+			w.Header().Set("Content-Type", "application/json"); 
+			json.NewEncoder(w).Encode(list)
 		})
 
 		// ✨ API：讀取 S3 持久化審計日誌
@@ -216,11 +249,11 @@ func main() {
 				http.Error(w, "僅支援 POST 請求", http.StatusMethodNotAllowed)
 				return
 			}
-			// 限制上傳上限 150MB
-			if err := r.ParseMultipartForm(150 << 20); err != nil {
-				http.Error(w, "檔案太大", http.StatusBadRequest)
-				return
-			}
+			// 限制上傳上限 150MB 沒必要，因為超過限制的檔案太多
+			// if err := r.ParseMultipartForm(150 << 20); err != nil {
+			// 	http.Error(w, "檔案太大", http.StatusBadRequest)
+			// 	return
+			// }
 
 			file, header, err := r.FormFile("file")
 

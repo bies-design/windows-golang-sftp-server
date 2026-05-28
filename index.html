@@ -283,7 +283,9 @@
         // ✨：非同步輪詢刷新 S3 傳輸稽核日誌
         async function refreshS3Logs() {
             try {
-                const res = await fetch('/api/s3-logs'); const list = await res.json(); const tbody = document.getElementById('s3TableBody');
+                const res = await fetch('/api/s3-logs'); 
+                const list = await res.json(); 
+                const tbody = document.getElementById('s3TableBody');
                 if (!list || list.length === 0) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted p-3">暫無 S3 雲端儲存同步紀錄</td></tr>'; return; }
                 list.reverse(); // 最新紀錄在最上方
                 tbody.innerHTML = list.map(l => {
@@ -331,9 +333,21 @@
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            refreshFiles(); renderHistoryUI(); refreshPipelines();
+            refreshFiles(); 
+            renderHistoryUI(); 
+            refreshPipelines();
+            refreshGlbFiles();  
+            refreshFragFiles();
+            refreshS3Logs();
+
             setInterval(refreshFiles, 4000);
             setInterval(refreshPipelines, 1500);
+
+            setInterval(function() {
+                refreshGlbFiles();
+                refreshFragFiles();
+                refreshS3Logs();
+            }, 4000);
         });
     </script>
 </body>
