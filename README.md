@@ -62,6 +62,10 @@ go get github.com/aws/aws-sdk-go-v2/service/s3
 go get github.com/aws/aws-sdk-go-v2/feature/s3/manager
 # ------------------ ^^^^^^^^^^^^^^ ---------------------
 go get github.com/spf13/viper
+# ------------------ google drive --------------------
+go get google.golang.org/api/drive/v3
+go get google.golang.org/api/option
+# ------------------ ^^^^^^^^^^^^ ----------------------
 go mod tidy
 
 ```
@@ -81,7 +85,7 @@ go test -v -run TestRunServer -timeout 0
 正式機組 <br/>
 ```bash
 go build -o go_bim_data_conversion_hub.exe main.go
-./bim_conversion_hub.exe
+./go_bim_data_conversion_hub.exe
 ```
 
 ### build
@@ -108,6 +112,7 @@ go build -o go_bim_data_conversion_hub.exe main.go
   在 `os.Create(fullPath)` 前自動執行 `taskMgr.BackupExistingFile(dataDir, safeName)`。
 * **SFTP 客戶端上傳** (`models/imp_sftp.go` -> `Filewrite`)：
   在 `os.OpenFile(..., os.O_TRUNC, ...)` 前自動執行 `b.TaskMgr.BackupExistingFile(b.BaseDir, cleanPath)`。
+* **從Google Drive 上傳** (`models/watch_google_drive.go` -> `online folder update`)
 
 #### 前端 UI 渲染流程
 1. **工作目錄渲染**：網頁每 4 秒呼叫一次 `/api/files`，動態列出實體工作資料夾的當前活躍檔案，並過濾掉隱藏檔與 `.versions`。

@@ -89,7 +89,7 @@ func main() {
 	viper.SetConfigType("env")
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
-		utilities.Info("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
+		utilities.Warn("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
 	}
 
 	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾
@@ -110,7 +110,7 @@ func main() {
 	maxUploads := viper.GetInt("MAX_UPLOADS")
 	maxDownloads := viper.GetInt("MAX_DOWNLOADS")
 
-    // ✨ 核心修正：引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
+    // 引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
 	utilities.Info("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
 	if err := initDirectoriesWithTimeout(dataDir, 5*time.Second); err != nil {
 		utilities.Error("❌ [Working Dir] 啟動失敗 ── %v", err)
@@ -118,6 +118,10 @@ func main() {
 	} else {
 		utilities.Info("🟢 [Working Dir] 啟用成功: %s", dataDir)
 	}
+
+	// ✨ 統一廣播控制器實例，讓各模組能夠共享主要FSM 處理狀態，收斂未來結構狀態管理的複雜度
+	ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
 
 	// ==================== 2. 實例初始化 (調用 models) ====================
 	taskMgr := models.NewManager()
@@ -343,7 +347,18 @@ func main() {
 		} 
 	}()
 
-	// ==================== 4. SSH 配置 ====================
+	// ==================== 4. Watch Google Drive ====================
+	watcher, err := NewGDriveWatcher(ctx, "config/gdrive-creds.json", "你的雲端硬碟BIM資料夾ID", "./data/incoming_gdrive", taskMgr)
+    if err != nil {
+        utilities.Error("❌ [GDrive] 初始化 監控失敗: %v", err)
+    } else {
+		utilities.Info("🟢 [GDrive] 監控模組初始化成功，已連接 Google Drive API")
+	}
+    
+    // 每 15 秒檢查一次變更
+    go watcher.Start(ctx, 15*time.Second)
+
+	// ==================== 5. SSH 配置 ====================
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	signer, _ := ssh.NewSignerFromKey(key)
 	// config := &ssh.ServerConfig{NoClientAuth: true}
@@ -357,10 +372,10 @@ func main() {
 	}
 	config.AddHostKey(signer)
 
-	// ==================== 5. 啟動 SFTP 服務 ====================
+	// ==================== 6. 啟動 SFTP 服務 ====================
 	listener, err := net.Listen("tcp", ":"+sftpPort) // 🔥 SFTP 核心
 	if err != nil {
-		utilities.Error("無法監聽 SFTP Port: %v", err)
+		utilities.Error("❌ [SFTP] 無法監聽 Port: %v", err)
 	}
 	utilities.Info("🟢 [SFTP] 伺服器已啟動, 監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
 
@@ -411,5 +426,6 @@ func main() {
 			}
 		}(nConn)
 	}
+
 }
 
