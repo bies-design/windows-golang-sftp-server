@@ -25,3 +25,8 @@ func hasAllowedExt(filename string, allowed map[string]bool) bool {
 
 	return false
 }
+
+// 提供給外部 package 呼叫的介面
+func HasAllowedExt(filename string, allowedExts map[string]bool) bool {
+	return hasAllowedExt(filename, allowedExts)
+}

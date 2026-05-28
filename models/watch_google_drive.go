@@ -2,9 +2,7 @@ package models
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"time"

@@ -1,28 +1,24 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/json"
+	"context"
 	"fmt"			// 補上此行：用於第 145 行的 fmt.Fprintf
 	"path/filepath" // 補上此行：用於第 114, 115, 138 行的 filepath 操作
-	"io"
-	// "log"
-	"net"
-	"net/http"
+
 	"os"
 	"time"
 	"embed"
 
+	"os/signal"
+	"syscall"
+
 	flag "github.com/spf13/pflag"
 
-	"github.com/pkg/sftp"
 	"github.com/spf13/viper"
-	"golang.org/x/crypto/ssh"
 
 	// 統一引入 models 套件
 	"intelligent-bim-data-conversion-hub/models"
-
+	"intelligent-bim-data-conversion-hub/services"
 	"intelligent-bim-data-conversion-hub/utilities"
 )
 //go:embed index.html
@@ -77,16 +73,22 @@ func main() {
 	viper.SetDefault("MAX_UPLOADS", 5)
 	viper.SetDefault("MAX_DOWNLOADS", 5)
 	viper.SetDefault("LOG_LEVEL", "debug")
+	viper.SetDefault("GDRIVE_INTERVAL", "15s")
+	viper.SetDefault("GDRIVE_FOLDER_ID", "你的雲端硬碟BIM資料夾ID")
 	
 	// 初始化日誌，預設為 Info 等級（隱藏 Debug）
 	utilities.InitLogger((viper.GetString("LOG_LEVEL")), true, "") // 預設啟用自動換行，使用預設換行符號
 	
-	utilities.Info("系統啟動中...") 
+	utilities.Info("🚀 智能 BIM 數據轉換中心系統啟動中...") 
 	utilities.Debug("這條「會」被印出來！因為等級已經調低到 Debug 了")
 
 	// ✨ 指定 Viper 去讀取本地的 .env 檔案作為設定檔, 此處不用遵守 EnvPrefix 規範
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
+
+	viper.AddConfigPath(".")       // 尋找路徑 1：執行當前根目錄
+	viper.AddConfigPath("./config") // 尋找路徑 2：config 資料夾內
+
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
 		utilities.Warn("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
@@ -96,6 +98,7 @@ func main() {
 	viper.SetEnvPrefix("INT_BIM_CH_")
 	// 允許從環境變數讀取設定，例如 SFTP_PORT, API_PORT, DATA_DIR 等
 	viper.AutomaticEnv() 
+
 	// 允許從命令列參數讀取設定，優先於環境變數
 	flag.String("sftp-port", "", "SFTP 監聽的 Port")
 	flag.String("data-dir", "", "檔案儲存的根目錄")
@@ -107,8 +110,6 @@ func main() {
 	sftpPort := viper.GetString("SFTP_PORT")
 	apiPort := viper.GetString("API_PORT")
 	dataDir := viper.GetString("DATA_DIR")
-	maxUploads := viper.GetInt("MAX_UPLOADS")
-	maxDownloads := viper.GetInt("MAX_DOWNLOADS")
 
     // 引入 5 秒看門狗超時機制，阻止啟動時無底限卡死
 	utilities.Info("[系統] 正在驗證與初始化工作目錄: %s ...", dataDir)
@@ -119,313 +120,52 @@ func main() {
 		utilities.Info("🟢 [Working Dir] 啟用成功: %s", dataDir)
 	}
 
+	// ==================== 2. 核心廣播控制器（Context） ====================
 	// ✨ 統一廣播控制器實例，讓各模組能夠共享主要FSM 處理狀態，收斂未來結構狀態管理的複雜度
+	// 這裡的 ctx 除了提供給 GDriveWatch，也會在優雅停機時派上用場
 	ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
 
-	// ==================== 2. 實例初始化 (調用 models) ====================
+	// ==================== 3. 初始化任務管理核心與基礎服務 ====================
 	taskMgr := models.NewManager()
-	backend := models.NewCustomSFTPBackend(dataDir, taskMgr, maxUploads, maxDownloads)
+	
+	// ==================== 4. 非同步啟動三大觸發源 (HTTP / SFTP / GDrive) ====================
 
-	handlers := sftp.Handlers{
-		FileGet:  backend,
-		FilePut:  backend,
-		FileCmd:  backend,
-		FileList: backend,
-	}
+	// A. 啟動 HTTP API 服務 (抽離細節)
+	httpServer := services.NewHTTPServer(apiPort, dataDir, taskMgr, webAssets)
+	go httpServer.Start(ctx)
 
-	// ==================== 3. 啟動 API 服務 ====================
-	go func() {
-		// 功能 1 & 2 的進度監控 API
-		http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
-			tasks := taskMgr.GetAllTasks()
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(tasks)
-		})
+	// B. 啟動 SFTP 服務 (抽離細節)
+	sftpServer := services.NewSFTPServer(sftpPort, dataDir, taskMgr)
+	go sftpServer.Start(ctx)
 
-		// 功能 1：顯示當前 working folder ，程序重啟時，網頁一呼叫此 API 就會自動從實體磁碟載入
-		http.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
-			files, err := os.ReadDir(filepath.Join(dataDir, "3dm"))
-			if err != nil {
-				http.Error(w, "無法讀取 3dm 目錄", http.StatusInternalServerError)
-				return
-			}
-			type FileItem struct {
-				Name string `json:"name"`
-				Size int64  `json:"size"`
-				ModTime time.Time `json:"mod_time"` // 修改時間欄位
-			}
-			var list []FileItem
-			for _, f := range files {
-				// ✨ 自動過濾：只加載根目錄檔案，自動排除子資料夾（glb與frag不會被錯當成普通檔案列出）
-				if !f.IsDir() && f.Name()[0] != '.' { // 同時過濾掉隱藏檔案或資料夾（例如 .versions）
-					info, err := f.Info()
-					if err == nil {
-						list = append(list, FileItem{
-							Name: f.Name(), 
-							Size: info.Size(), 
-							ModTime: info.ModTime(), // 修改時間
-						})
-					}
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(list)
-		})
-
-		// ✨ API：動態掃描並獲取已產出的 GLB 檔案清單
-		http.HandleFunc("/api/files/glb", func(w http.ResponseWriter, r *http.Request) {
-			files, err := os.ReadDir(filepath.Join(dataDir, "glb"))
-			if err != nil { http.Error(w, "無法讀取 GLB 目錄", http.StatusInternalServerError); return }
-			type FileItem struct { Name string `json:"name"`; Size int64 `json:"size"`; ModTime time.Time `json:"mod_time"` }
-			var list []FileItem
-			for _, f := range files {
-				if !f.IsDir() && f.Name()[0] != '.' {
-					info, err := f.Info()
-					if err == nil { list = append(list, FileItem{Name: f.Name(), Size: info.Size(), ModTime: info.ModTime()}) }
-				}
-			}
-			w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(list)
-		})
-
-		// ✨ API：動態掃描並獲取已產出的 Frag 檔案清單
-		http.HandleFunc("/api/files/frag", func(w http.ResponseWriter, r *http.Request) {
-			files, err := os.ReadDir(filepath.Join(dataDir, "frag"))
-			if err != nil { http.Error(w, "無法讀取 Frag 目錄", http.StatusInternalServerError); return }
-
-			// 定義允許的副檔名清單（不含點，全小寫方便比對）
-            allowedExts := map[string]bool{
-                "frag":    true,
-                "bz2":     true,
-                "gz":      true,
-                "tar.gz":  true,
-                "tar.bz2": true,
-                "zip":     true,
-            }
-
-			type FileItem struct { 
-				Name string `json:"name"`; 
-				Size int64 `json:"size"`; 
-				ModTime time.Time `json:"mod_time"` 
-			}
-			var list []FileItem
-
-			for _, f := range files {
-				name := f.Name()
-
-				// 排除目錄、隱藏檔案，並確保長度安全
-                if f.IsDir() || len(name) == 0 || name[0] == '.' {
-                    continue
-                }
-
-				// 檢查副檔名
-                if !utilities.HasAllowedExt(name, allowedExts) {
-                    continue
-                }
-
-				info, err := f.Info()
-                if err == nil { 
-                    list = append(list, FileItem{
-                        Name:    name, 
-                        Size:    info.Size(), 
-                        ModTime: info.ModTime(),
-                    }) 
-                }
-			}
-			w.Header().Set("Content-Type", "application/json"); 
-			json.NewEncoder(w).Encode(list)
-		})
-
-		// ✨ API：讀取 S3 持久化審計日誌
-		http.HandleFunc("/api/s3-logs", func(w http.ResponseWriter, r *http.Request) {
-			vcsLogPath := filepath.Join(dataDir, ".versions", "s3_upload_log.json")
-			w.Header().Set("Content-Type", "application/json")
-			if data, err := os.ReadFile(vcsLogPath); err == nil {
-				w.Write(data)
-			} else {
-				w.Write([]byte("[]"))
-			}
-		})
-
-		// 功能 3：基礎網頁端檔案上傳
-		http.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				http.Error(w, "僅支援 POST 請求", http.StatusMethodNotAllowed)
-				return
-			}
-			// 限制上傳上限 150MB 沒必要，因為超過限制的檔案太多
-			// if err := r.ParseMultipartForm(150 << 20); err != nil {
-			// 	http.Error(w, "檔案太大", http.StatusBadRequest)
-			// 	return
-			// }
-
-			file, header, err := r.FormFile("file")
-
-			if err != nil {
-				http.Error(w, "無效的檔案欄位", http.StatusBadRequest)
-				return
-			}
-			defer file.Close()
-
-			// 防禦 Directory Traversal 攻擊
-			safeName := filepath.Base(header.Filename)
-			fullPath := filepath.Join(dataDir, "3dm/", safeName)
-
-			// ✨ 核心 VCS 插入點：網頁端覆蓋前同樣進行歷史備份
-			taskMgr.BackupExistingFile(dataDir, safeName)
-
-			out, err := os.Create(fullPath)
-			if err != nil {
-				http.Error(w, "伺服器無法建立檔案", http.StatusInternalServerError)
-				return
-			}
-			defer out.Close()
-
-			if _, err := io.Copy(out, file); err != nil {
-				http.Error(w, "寫入檔案失敗", http.StatusInternalServerError)
-				return
-			}
-
-			// 註冊任務並非同步拋入 Pipeline
-			taskID := models.GenerateTaskID("pipeline")
-			taskMgr.AddTask(&models.Task{
-				ID:       taskID,
-				TaskType: "pipeline",
-				FilePath: safeName,
-				Status:   "processing",
-			})
-
-			if filepath.Ext(safeName) == ".3dm" {
-				go taskMgr.StartPipeline(taskID, fullPath)
-			} else {
-				taskMgr.UpdateStatus(taskID, "completed")
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"message":"網頁端上傳成功","task_id":"%s"}`, taskID)
-		})
-
-		// ✨ 功能 4：提供前端獲取特定檔案的版本演進歷史
-		http.HandleFunc("/api/versions", func(w http.ResponseWriter, r *http.Request) {
-			fileName := r.URL.Query().Get("file")
-			if fileName == "" { http.Error(w, "缺少 file 參數", http.StatusBadRequest); return }
-			
-			ext := filepath.Ext(fileName)
-			pureName := fileName[:len(fileName)-len(ext)]
-			vcsLogPath := filepath.Join(dataDir, ".versions", pureName+"_vcs.json")
-			
-			w.Header().Set("Content-Type", "application/json")
-			// 如果日誌檔存在就輸出，不存在就直接回傳空陣列
-			if data, err := os.ReadFile(vcsLogPath); err == nil {
-				w.Write(data)
-			} else {
-				w.Write([]byte("[]"))
-			}
-		})
-
-		// 網頁首頁 UI 渲染
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-			// 開發期動態讀取實體檔案 (改 HTML 免重啟 Go)
-			if data, err := os.ReadFile("index.html"); err == nil {
-				w.Write(data)
-			} else {
-				// 生產期安全降級：改由 webAssets 虛擬檔案系統中讀取 index.html 的 Byte 陣列
-				if embedData, err := webAssets.ReadFile("index.html"); err == nil {
-					w.Write(embedData)
-				} else {
-					http.Error(w, "BIM 控制台內嵌網頁加載失敗", http.StatusInternalServerError)
-				}
-			}
-		})
-
-		utilities.Info("🟢 [API] http 伺服器啟動，監聽 Port: %s", apiPort)
-		err := http.ListenAndServe(":"+apiPort, nil); 
-		if err != nil {
-			utilities.Error("❌ API http 伺服器啟動失敗: %v", err)
-		} 
-	}()
-
-	// ==================== 4. Watch Google Drive ====================
-	watcher, err := NewGDriveWatcher(ctx, "config/gdrive-creds.json", "你的雲端硬碟BIM資料夾ID", "./data/incoming_gdrive", taskMgr)
-    if err != nil {
-        utilities.Error("❌ [GDrive] 初始化 監控失敗: %v", err)
-    } else {
-		utilities.Info("🟢 [GDrive] 監控模組初始化成功，已連接 Google Drive API")
-	}
-    
-    // 每 15 秒檢查一次變更
-    go watcher.Start(ctx, 15*time.Second)
-
-	// ==================== 5. SSH 配置 ====================
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	signer, _ := ssh.NewSignerFromKey(key)
-	// config := &ssh.ServerConfig{NoClientAuth: true}
-	// 修正：廢棄 NoClientAuth，改用萬用密碼驗證回呼（PasswordCallback）
-	// 這樣不論圖形化工具送出什麼帳號、密碼，伺服器都會正常回傳「通過」，避免工具無所適從
-	config := &ssh.ServerConfig{
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			utilities.Info("[Auth] 使用者 %s 正在嘗試登入", c.User())
-			return nil, nil // 返回 nil 代表密碼驗證成功，允許登入
-		},
-	}
-	config.AddHostKey(signer)
-
-	// ==================== 6. 啟動 SFTP 服務 ====================
-	listener, err := net.Listen("tcp", ":"+sftpPort) // 🔥 SFTP 核心
+	// C. 啟動 Google Drive 監控 Worker (加入可能性)
+	gdriveInterval, _ := time.ParseDuration(viper.GetString("GDRIVE_INTERVAL"))
+	gdriveWatcher, err := services.NewGDriveWatcher(
+		ctx,
+		"config/gdrive-creds.json",
+		viper.GetString("GDRIVE_FOLDER_ID"),
+		filepath.Join(dataDir, "incoming_gdrive"),
+		taskMgr,
+	)
 	if err != nil {
-		utilities.Error("❌ [SFTP] 無法監聽 Port: %v", err)
-	}
-	utilities.Info("🟢 [SFTP] 伺服器已啟動, 監聽 Port: %s, 儲存目錄: %s", sftpPort, dataDir)
-
-	for {
-		nConn, err := listener.Accept()
-		if err != nil {
-			utilities.Info("接受 TCP 連線失敗: %v", err)
-			continue
-		}
-
-		go func(conn net.Conn) {
-			_, chans, reqs, err := ssh.NewServerConn(conn, config)
-			if err != nil {
-				utilities.Info("SSH 握手失敗: %v", err)
-				return
-			}
-			go ssh.DiscardRequests(reqs)
-
-			for newChannel := range chans {
-				if newChannel.ChannelType() != "session" {
-					newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-					continue
-				}
-				channel, requests, err := newChannel.Accept()
-				if err != nil {
-					continue
-				}
-
-				go func(in <-chan *ssh.Request) {
-					for req := range in {
-						ok := false
-						switch req.Type {
-						case "subsystem":
-							if string(req.Payload[4:]) == "sftp" {
-								ok = true
-								server := sftp.NewRequestServer(channel, handlers)
-								go func() {
-									defer server.Close()
-									if err := server.Serve(); err == io.EOF {
-										server.Close()
-									}
-								}()
-							}
-						}
-						req.Reply(ok, nil)
-					}
-				}(requests)
-			}
-		}(nConn)
+		utilities.Error("❌ [GDrive] 監控模組初始化失敗: %v", err)
+	} else {
+		go gdriveWatcher.Start(ctx, gdriveInterval)
 	}
 
+	// ==================== 5. 監聽系統信號，實現全局「優雅停機」 ====================
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	
+	<-quit // 阻塞在此，直到收到 Ctrl+C 或 Windows 關閉信號
+	utilities.Warn("⚠️ 接收到終止信號，正在優雅關閉所有子系統與釋放連線資源...")
+
+	// 廣播取消信號：通知 Google Drive 監控與正在進行的非同步任務安全退出
+	cancel()
+
+	// 給予 HTTP 服務額外的超時緩衝，讓當前正在傳輸的 BIM 大檔案可以傳完
+	httpServer.Stop(5 * time.Second)
+
+	utilities.Info("🏁 數據轉換中心已安全關閉。")
 }
-

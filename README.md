@@ -20,6 +20,20 @@ Golang
 go1.25.10 windows/amd64 
 ```
 
+### Filesystem and explain
+```text
+├── main.go                     # 核心骨架，只負責初始化、設定讀取與生命週期調度
+├── config/                     # 放 .env 或 gdrive-creds.json
+├── models/                     # FSM, TaskManager, CustomSFTPBackend, googleDriveWatcher
+├── utilities/                  # Logger 與 副檔名是否支援檢查工具(frag 產出確認)
+├── methods/                    # 轉檔流程實作方案
+└── services/                   # 存放抽離出來的伺服器與監控實作
+    ├── http_server.go          # HTTP API 路由與設定細節
+    ├── sftp_server.go          # SFTP SSH 握手與請求服務細節
+    └── gdrive_watcher.go       # Google Drive 監控與 Pipeline 觸發
+
+```
+
 ### Tools
 1. PowerShell ENV
 

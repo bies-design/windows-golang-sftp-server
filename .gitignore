@@ -26,6 +26,7 @@ go.work.sum
 
 # env file
 .env
+gdrive-creds.json
 
 # Editor/IDE
 # .idea/
