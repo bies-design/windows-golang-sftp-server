@@ -109,5 +109,3 @@ func Debug(msg string, args ...any) {
 func Info(msg string, args ...any)  { if currentLevel <= LevelInfo { logOutput("INFO", msg, args...) } }
 func Warn(msg string, args ...any)  { if currentLevel <= LevelWarn { logOutput("WARN", msg, args...) } }
 func Error(msg string, args ...any) { if currentLevel <= LevelError { logOutput("ERROR", msg, args...) } }
-
-// 6. 在專案其他地方取用logger
