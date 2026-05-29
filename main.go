@@ -83,7 +83,8 @@ func main() {
 	utilities.Debug("這條「會」被印出來！因為等級已經調低到 Debug 了")
 
 	// ✨ 指定 Viper 去讀取本地的 .env 檔案作為設定檔, 此處不用遵守 EnvPrefix 規範
-	viper.SetConfigFile(".env")
+	// viper.SetConfigFile(".env") // 不使用此功能，因為優先度太高沒有彈性
+	viper.SetConfigName(".env")
 	viper.SetConfigType("env")
 
 	viper.AddConfigPath(".")       // 尋找路徑 1：執行當前根目錄
@@ -91,7 +92,11 @@ func main() {
 
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
+		currentDir, _ := os.Getwd()
+		utilities.Warn("[Debug] 目前程式工作目錄 (Working Dir): %s", currentDir)
 		utilities.Warn("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
+	} else {
+		utilities.Info("✅ 成功載入設定檔: %s", viper.ConfigFileUsed())
 	}
 
 	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾

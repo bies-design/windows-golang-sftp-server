@@ -98,8 +98,16 @@ go test -v -run TestRunServer -timeout 0
 ```
 正式機組 <br/>
 ```bash
-go build -o go_bim_data_conversion_hub.exe main.go
-./go_bim_data_conversion_hub.exe
+go build -o goBimDataConversionHub.exe main.go
+./goBimDataConversionHub.exe
+```
+
+### 設定檔案
+```text
+├── goBimDataConversionHub.exe  # 執行檔案，或是用 go test or go run 都可以
+└── config/                     # 存放設定
+    ├── .env                    # 環境變數，也可以直接加在系統中更安全
+    ├── gdrive-creds.json       # google drive 的設定
 ```
 
 ### build
