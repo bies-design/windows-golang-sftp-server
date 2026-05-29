@@ -66,6 +66,21 @@ func initDirectoriesWithTimeout(dataDir string, timeout time.Duration) error {
 }
 
 func main() {
+	// ==================== 0. 預備紀錄 ====================
+	// 在正式初始化 Logger 之前，先將讀取設定檔的過程中可能產生的訊息暫存起來，等 Logger 就緒後再統一輸出
+	type logRecord struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+	}
+
+	var beforeLogQueue = make([]logRecord, 0, 10) // 預留 10 個空間提升效能
+	
+	// 建立一個方便塞入緩衝的輔助匿名函式
+	queueLog := func(level, format string, v ...interface{}) {
+		msg := fmt.Sprintf(format, v...)
+		beforeLogQueue = append(beforeLogQueue, logRecord{Level: level, Message: msg})
+	}
+
 	// ==================== 1. 初始化設定 ====================
 	viper.SetDefault("SFTP_PORT", "2022")
 	viper.SetDefault("API_PORT", "8088")
@@ -75,12 +90,6 @@ func main() {
 	viper.SetDefault("LOG_LEVEL", "debug")
 	viper.SetDefault("GDRIVE_INTERVAL", "15s")
 	viper.SetDefault("GDRIVE_FOLDER_ID", "你的雲端硬碟BIM資料夾ID")
-	
-	// 初始化日誌，預設為 Info 等級（隱藏 Debug）
-	utilities.InitLogger((viper.GetString("LOG_LEVEL")), true, "") // 預設啟用自動換行，使用預設換行符號
-	
-	utilities.Info("🚀 智能 BIM 數據轉換中心系統啟動中...") 
-	utilities.Debug("這條「會」被印出來！因為等級已經調低到 Debug 了")
 
 	// ✨ 指定 Viper 去讀取本地的 .env 檔案作為設定檔, 此處不用遵守 EnvPrefix 規範
 	// viper.SetConfigFile(".env") // 不使用此功能，因為優先度太高沒有彈性
@@ -93,11 +102,35 @@ func main() {
 	if err := viper.ReadInConfig(); err != nil {
 		// 開發期如果找不到 .env 先印出提示，不強制崩潰（因為生產環境可能直接走 Docker Env）
 		currentDir, _ := os.Getwd()
-		utilities.Warn("[Debug] 目前程式工作目錄 (Working Dir): %s", currentDir)
-		utilities.Warn("[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
+		queueLog("warn", "[Debug] 目前程式工作目錄 (Working Dir): %s", currentDir)
+		queueLog("warn", "[提示] 未找到 .env 設定檔，將完全採用預設值或作業系統環境變數。 %s, 原因:%+v", "error", err)
 	} else {
-		utilities.Info("✅ 成功載入設定檔: %s", viper.ConfigFileUsed())
+		queueLog("info", "✅ 成功載入設定檔: %s", viper.ConfigFileUsed())
 	}
+
+	queueLog("info", "🚀 智能 BIM 數據轉換中心系統啟動中...") 
+	queueLog("debug", "這條「會」被印出來！因為等級已經調低到 Debug 了")
+
+	// 初始化日誌，預設為 Info 等級（隱藏 Debug）
+	utilities.InitLogger((viper.GetString("LOG_LEVEL")), true, "") // 預設啟用自動換行，使用預設換行符號
+
+	// 釋放(Flush)暫存的日誌
+	for _, rec := range beforeLogQueue {
+		switch rec.Level {
+		case "debug":
+			utilities.Debug(rec.Message)
+		case "info":
+			utilities.Info(rec.Message)
+		case "warn":
+			utilities.Warn(rec.Message)
+		case "error":
+			utilities.Error(rec.Message)
+		default:
+			utilities.Info(rec.Message)
+		}
+	}
+	// 釋放完畢後清空切片，讓記憶體回收
+	beforeLogQueue = nil
 
 	// 限制全局的環境變數，只有 "INT_BIM_CH_" 前綴的才會被 Viper 自動讀取，避免不小心讀到其他無關的環境變數造成干擾
 	viper.SetEnvPrefix("INT_BIM_CH_")

@@ -101,9 +101,13 @@ func logOutput(levelLabel string, msg string, args ...any) {
 	fmt.Fprintf(os.Stdout, "%s [%s] %s", timeStr, levelLabel, formattedMsg)
 }
 
-func Debug(msg string, args ...any) { logOutput("DEBUG", msg, args...) }
-func Info(msg string, args ...any)  { logOutput("INFO", msg, args...) }
-func Warn(msg string, args ...any)  { logOutput("WARN", msg, args...) }
-func Error(msg string, args ...any) { logOutput("ERROR", msg, args...) }
+func Debug(msg string, args ...any) { 
+	if currentLevel <= LevelDebug {
+		logOutput("DEBUG", msg, args...) 
+	}
+}
+func Info(msg string, args ...any)  { if currentLevel <= LevelInfo { logOutput("INFO", msg, args...) } }
+func Warn(msg string, args ...any)  { if currentLevel <= LevelWarn { logOutput("WARN", msg, args...) } }
+func Error(msg string, args ...any) { if currentLevel <= LevelError { logOutput("ERROR", msg, args...) } }
 
 // 6. 在專案其他地方取用logger
