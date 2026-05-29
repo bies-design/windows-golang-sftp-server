@@ -128,16 +128,13 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 		return returnResult(fmt.Errorf(errBuilder.String()), "", "")
 	} else  {
 		// 轉檔成功，但 stdout 中可能有警告訊息，我們也要記錄下來以供後續分析
-		var isCompressionSuccess bool = true // 預設為成功，除非發現錯誤或警告訊息
 		if nodeResp.Error != "" {
 			utilities.Warn("[⚠️ Frag 轉檔成功，但有警告訊息，表示沒有材質包]:\n%s\n", nodeResp.Error)
-			isCompressionSuccess = false
 		}
 		if nodeResp.Stderr != "" {
 			utilities.Warn("[⚠️ Frag 轉檔成功，但有 CLI Stderr 輸出]:\n%s\n", nodeResp.Stderr)
-			isCompressionSuccess = false
 		}
-		if strings.Contains(nodeResp.Stdout, "GLB 轉換成功") && isCompressionSuccess {
+		if nodeResp.FragResult != "" && nodeResp.ZipType != "" {
 			// 1. 取回轉檔的檔案名稱
 			base := filepath.Base(nodeResp.FragResult) // 取得輸入路徑的檔名，例如 "model.glb"
 			// 2. 去除副檔名，得到純檔名，例如 "model"
@@ -149,11 +146,13 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 			// 5. 組合出轉檔後路徑和材質壓縮包的名稱，例如 "filename.zip"
 			compressionFilePath = filesDir + "/" + fileNameWithoutExt + "." + zipType // 假設 Node 服務會在成功時回傳 fragresult 欄位，和壓縮檔的路徑相同
 			utilities.Info("[✅ Frag 轉檔成功，且材質包壓縮成功]:\nFrag Result: %s\nCompression File Path: %s\n", nodeResp.FragResult, compressionFilePath)
+		} else {
+			utilities.Info("[💡 Frag 轉檔成功]: 此模型為純幾何，無材質包。Frag 結果: %s", nodeResp.FragResult)
 		}
 
 	}
 
 	// 9. 轉檔完全成功，將 Node.js 內部的轉檔日誌有條理地反映到 Go 的終端機中
-	utilities.Debug("\n[✅ Frag 轉檔完全成功]\n--- Node.js 執行階段輸出 (stdout) ---\n%s\n------------------------------------\n", nodeResp.Stdout)
+	utilities.Debug("\n[✅ Frag 轉檔結束]\n--- Node.js 執行階段輸出 (stdout) ---\n%s\n------------------------------------\n", nodeResp.Stdout)
 	return returnResult(nil, nodeResp.FragResult, compressionFilePath)
 }
