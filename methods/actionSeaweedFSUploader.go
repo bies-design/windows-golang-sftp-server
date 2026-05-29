@@ -21,7 +21,23 @@ import (
 // UploadToSeaweedFS 負責將特定命名下的 .frag 與材質壓縮包透過 S3 介面上傳至 SeaweedFS
 func UploadToSeaweedFS(fragStorePath string, compressionPath string) error {
 	// 1. 驗證與收集檔案路徑
-	filesToUpload := []string{fragStorePath, compressionPath}
+	// filesToUpload := []string{fragStorePath, compressionPath}
+	// 增加可信賴度
+	var filesToUpload []string
+	if fragStorePath !=  "" {
+		if _, err := os.Stat(fragStorePath); os.IsNotExist(err) {
+			return fmt.Errorf("核心幾何檔案不存在: %s", fragStorePath)
+		} else {
+			filesToUpload = append(filesToUpload, fragStorePath)
+		}
+	}
+	if compressionPath !=  "" {
+		if _, err := os.Stat(compressionPath); os.IsNotExist(err) {
+			utilities.Warn("[🚀 SeaweedFS S3] 材質壓縮包不存在: %s", compressionPath)
+		} else {
+			filesToUpload = append(filesToUpload, compressionPath)
+		}
+	}
 
 	// 2. 讀取配置並決定 S3 Endpoint
 	s3URL := viper.GetString("S3_Cloud_URL")
@@ -75,32 +91,34 @@ func UploadToSeaweedFS(fragStorePath string, compressionPath string) error {
 	// 使用 Uploader 可以支援大檔案自動分塊串流上傳，不爆記憶體
 	uploader := manager.NewUploader(s3Client)
 
+	utilities.Info("[🚀 SeaweedFS S3] 已成功初始化 S3 用戶端，準備上傳檔案至 Bucket: %s", bucketName)
+	utilities.Info("[🚀 SeaweedFS S3] 上傳檔案有： %s", strings.Join(filesToUpload, ", "))
+
+	// 盡量嘗試把所有的檔案都上傳過，再決定是否為錯誤發生
 	// 4. 依序檢查並上傳檔案
+	var uploadErrors []string
+	var isUploadFailed bool = false
 	for _, targetPath := range filesToUpload {
 		if targetPath == "" {
 			continue
 		}
 
-		// 防呆與過濾材質包不存在的狀況
-		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-			ext := filepath.Ext(targetPath)
-			// 檢查是否為常見的壓縮格式
-			if ext == ".bzip2" || ext == ".gzip" || ext == ".zip" || strings.HasSuffix(targetPath, ".tar.gz") || strings.HasSuffix(targetPath, ".tar.bzip2") {
-				utilities.Info("[提示] 找不到材質包 %s，此模型應為純幾何，跳過上傳。\n", filepath.Base(targetPath))
-				continue
-			}
-			return fmt.Errorf("上傳失敗：核心幾何檔案不存在: %s", targetPath)
-		}
-
 		utilities.Debug("[🚀 SeaweedFS S3] 正在上傳檔案: %s 至 Bucket: %s\n", filepath.Base(targetPath), bucketName)
 
 		// 執行 S3 上傳
-		err = executeS3Upload(ctx, uploader, bucketName, targetPath)
-		if err != nil {
-			return fmt.Errorf("檔案 [%s] 透過 S3 上傳至 SeaweedFS 失敗: %v", filepath.Base(targetPath), err)
+		execS3UploadErr := executeS3Upload(ctx, uploader, bucketName, targetPath)
+		if execS3UploadErr != nil {
+			utilities.Warn("[🚀 SeaweedFS S3] 檔案 [%s] 透過 S3 上傳至 SeaweedFS 失敗: %v", filepath.Base(targetPath), execS3UploadErr)
+			isUploadFailed = true
+			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: %v", filepath.Base(targetPath), execS3UploadErr))
+		} else {
+			utilities.Info("[🚀 SeaweedFS S3] 檔案 [%s] 已成功上傳至 SeaweedFS Bucket: %s", filepath.Base(targetPath), bucketName)
 		}
 	}
 
+	if isUploadFailed {
+		return fmt.Errorf("%v", strings.Join(uploadErrors, ", "))
+	}
 	return nil
 }
 

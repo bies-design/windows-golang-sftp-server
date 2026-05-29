@@ -103,29 +103,15 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 	}
 
 	// 7. 二次防禦：網路層級狀態碼檢查
-	// 即使 Node 內部崩潰 (500)，我們也要先把 Body 抓下來解析詳細錯誤原因，而不是只丟出 500 錯誤
-	if resp.StatusCode != http.StatusOK || nodeResp.Status == "failed" || nodeResp.Status == "error" {
-		utilities.Warn("[⚠️ Frag 轉檔失敗] HTTP 狀態碼: %d, Node 服務回傳狀態: %s, 訊息: %s", resp.StatusCode, nodeResp.Status, nodeResp.Message)
-		
-		// 優先順序 1：如果 Node.js 有拋出系統層級 error (例如 Pipeline 執行失敗)
-		if nodeResp.Status == "failed" {
-			return returnResult(fmt.Errorf("Frag 伺服器任務執行失敗 錯誤: %s (詳細 Stderr: %s) (過程 Stdout: %s)", nodeResp.Error, nodeResp.Stderr, nodeResp.Stdout), "", "")
-		}
-		
-		// 優先順序 2：如果是路由找不到或參數缺失的 message (例如 404 或 400)
-		if nodeResp.Status == "error" {
-			return returnResult(fmt.Errorf("Frag 伺服器拒絕請求 (狀態碼 %d): %s", resp.StatusCode, nodeResp.Message), "", "")
-		}
-
-		// 備援：如果什麼欄位都沒寫，但狀態碼不對
-		return returnResult(fmt.Errorf("Frag 伺服器網路層級錯誤 (狀態碼 %d): %s", resp.StatusCode, string(bodyBytes)), "", "")
-	}
-
+	// 預防極端情況：例如 Node.js 進程直接被 Windows 工作管理員砍掉（回傳 502/504 且無 Body）
+    if resp.StatusCode != http.StatusOK && len(bodyBytes) == 0 {
+        return returnResult(fmt.Errorf("Frag 伺服器網路層級崩潰 (狀態碼 %d), 無法取得任何回傳資料", resp.StatusCode), "", "")
+    }
 
 	// 8. 🟢 核心原子業務判定：精確檢查 status 是否為 "completed"
 	var compressionFilePath string = "" // 預設為空，除非轉檔成功且 Node 服務回傳了 fragresult 欄位
 	if !strings.EqualFold(nodeResp.Status, "completed") {
-		// 整合 Node 丟出來的各種錯誤蛛絲馬跡，回傳給 Go 的 Pipeline 狀態機
+		// 進入此處，代表轉檔必定失敗（不論是 failed、error、或是 404/400 路由參數錯誤）
 		var errBuilder strings.Builder
 		errBuilder.WriteString(fmt.Sprintf("Frag 轉檔管線業務邏輯 [%s] -> %s\n", nodeResp.Status, nodeResp.Message))
 		
@@ -136,7 +122,7 @@ func CallGlbtoFreg(glbPath string, outputDirPath string) GlbToFragResult {
 			errBuilder.WriteString(fmt.Sprintf("[CLI Stderr]: %s\n", nodeResp.Stderr))
 		}
 		if nodeResp.Stdout != "" {
-			errBuilder.WriteString(fmt.Sprintf("[CLI Stdout 殘留殘渣]:\n%s\n", nodeResp.Stdout))
+			errBuilder.WriteString(fmt.Sprintf("[CLI Stdout 殘留]:\n%s\n", nodeResp.Stdout))
 		}
 		
 		return returnResult(fmt.Errorf(errBuilder.String()), "", "")
